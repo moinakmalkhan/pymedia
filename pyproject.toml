@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pymedia"
+version = "0.1.0"
+description = "In-memory video processing library powered by FFmpeg"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.8"
+keywords = ["video", "audio", "ffmpeg", "extract", "convert", "compress", "gif", "media"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: C",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Topic :: Multimedia :: Video :: Conversion",
+    "Topic :: Multimedia :: Sound/Audio :: Conversion",
+]
+
+[project.urls]
+Homepage = "https://github.com/moinakmalkhan/pymedia"
+Repository = "https://github.com/moinakmalkhan/pymedia"
+Issues = "https://github.com/moinakmalkhan/pymedia/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
