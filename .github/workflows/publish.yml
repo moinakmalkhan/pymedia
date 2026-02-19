@@ -1,53 +1,93 @@
-name: Publish to PyPI
+name: Build and Publish Wheels
 
 on:
   release:
     types: [published]
+  workflow_dispatch:
 
 jobs:
-  build:
+  build_linux:
+    name: Build Linux wheels
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Set up QEMU (for ARM64 emulation)
+        uses: docker/setup-qemu-action@v3
         with:
-          python-version: "3.12"
+          platforms: arm64
+
+      - name: Build wheels
+        uses: pypa/cibuildwheel@v2.21.3
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-linux
+          path: ./wheelhouse/*.whl
+
+  build_macos_x86:
+    name: Build macOS x86_64 wheels
+    runs-on: macos-13
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build wheels
+        uses: pypa/cibuildwheel@v2.21.3
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-macos-x86
+          path: ./wheelhouse/*.whl
+
+  build_macos_arm:
+    name: Build macOS arm64 wheels
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build wheels
+        uses: pypa/cibuildwheel@v2.21.3
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-macos-arm
+          path: ./wheelhouse/*.whl
+
+  build_sdist:
+    name: Build source distribution
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
 
       - name: Install system dependencies
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y gcc pkg-config \
             libavformat-dev libavcodec-dev libavutil-dev \
-            libswresample-dev libswscale-dev ffmpeg
+            libswresample-dev libswscale-dev
 
-      - name: Install build tools
-        run: pip install build
+      - name: Build sdist
+        run: pipx run build --sdist
 
-      - name: Build sdist and wheel
-        run: python -m build
-
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: dist
-          path: dist/
+          name: wheels-sdist
+          path: dist/*.tar.gz
 
   publish:
-    needs: build
+    name: Publish to PyPI
+    needs: [build_linux, build_macos_x86, build_macos_arm, build_sdist]
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
       id-token: write  # required for trusted publishing
 
     steps:
-      - name: Download build artifacts
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
-          name: dist
-          path: dist/
+          pattern: wheels-*
+          path: dist
+          merge-multiple: true
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1

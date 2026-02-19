@@ -17,6 +17,12 @@
 #include <libswresample/swresample.h>
 #include <libswscale/swscale.h>
 
+// FFmpeg 5.1+ introduced AVChannelLayout (ch_layout) and deprecated
+// the old channel_layout / channels integer fields.
+// LIBAVCODEC_VERSION 59.37.100 == FFmpeg 5.1
+#define FF_NEW_CHANNEL_LAYOUT \
+    (LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(59, 37, 100))
+
 // ============================================================
 // Common helpers
 // ============================================================
@@ -150,7 +156,11 @@ char* get_video_info(uint8_t *video_data, size_t video_size) {
         pos += snprintf(json + pos, sizeof(json) - pos,
                         ",\"sample_rate\":%d", apar->sample_rate);
         pos += snprintf(json + pos, sizeof(json) - pos,
+#if FF_NEW_CHANNEL_LAYOUT
                         ",\"channels\":%d", apar->ch_layout.nb_channels);
+#else
+                        ",\"channels\":%d", apar->channels);
+#endif
     }
 
     pos += snprintf(json + pos, sizeof(json) - pos, "}");
@@ -193,7 +203,11 @@ static void encode_fifo_frames(AVAudioFifo *fifo, AVCodecContext *enc_ctx,
                                 int frame_size, int64_t *pts_counter) {
     while (av_audio_fifo_size(fifo) >= frame_size) {
         enc_frame->format = enc_ctx->sample_fmt;
+#if FF_NEW_CHANNEL_LAYOUT
+        av_channel_layout_copy(&enc_frame->ch_layout, &enc_ctx->ch_layout);
+#else
         enc_frame->channel_layout = enc_ctx->channel_layout;
+#endif
         enc_frame->sample_rate = enc_ctx->sample_rate;
         enc_frame->nb_samples = frame_size;
         av_frame_get_buffer(enc_frame, 0);
@@ -222,7 +236,11 @@ static void encode_fifo_remaining(AVAudioFifo *fifo, AVCodecContext *enc_ctx,
     if (remaining <= 0) return;
 
     enc_frame->format = enc_ctx->sample_fmt;
+#if FF_NEW_CHANNEL_LAYOUT
+    av_channel_layout_copy(&enc_frame->ch_layout, &enc_ctx->ch_layout);
+#else
     enc_frame->channel_layout = enc_ctx->channel_layout;
+#endif
     enc_frame->sample_rate = enc_ctx->sample_rate;
     enc_frame->nb_samples = remaining;
     av_frame_get_buffer(enc_frame, 0);
@@ -292,8 +310,12 @@ uint8_t* extract_audio(uint8_t *video_data, size_t video_size,
     if (!enc_ctx) goto cleanup;
     enc_ctx->sample_rate = 44100;
     enc_ctx->sample_fmt = enc_sample_fmt;
+#if FF_NEW_CHANNEL_LAYOUT
+    av_channel_layout_default(&enc_ctx->ch_layout, 2);
+#else
     enc_ctx->channel_layout = AV_CH_LAYOUT_STEREO;
     enc_ctx->channels = 2;
+#endif
     if (enc_bitrate > 0) enc_ctx->bit_rate = enc_bitrate;
     enc_ctx->time_base = (AVRational){1, 44100};
 
@@ -305,11 +327,25 @@ uint8_t* extract_audio(uint8_t *video_data, size_t video_size,
     int frame_size = enc_ctx->frame_size > 0 ? enc_ctx->frame_size : 1024;
 
     // Resampler
+#if FF_NEW_CHANNEL_LAYOUT
+    {
+        AVChannelLayout out_layout = AV_CHANNEL_LAYOUT_STEREO;
+        AVChannelLayout in_layout;
+        if (dec_ctx->ch_layout.nb_channels > 0)
+            av_channel_layout_copy(&in_layout, &dec_ctx->ch_layout);
+        else
+            av_channel_layout_default(&in_layout, 2);
+        swr_alloc_set_opts2(&swr, &out_layout, enc_sample_fmt, 44100,
+            &in_layout, dec_ctx->sample_fmt, dec_ctx->sample_rate, 0, NULL);
+        av_channel_layout_uninit(&in_layout);
+    }
+#else
     swr = swr_alloc_set_opts(NULL,
         AV_CH_LAYOUT_STEREO, enc_sample_fmt, 44100,
         dec_ctx->channel_layout ? dec_ctx->channel_layout
             : av_get_default_channel_layout(dec_ctx->channels),
         dec_ctx->sample_fmt, dec_ctx->sample_rate, 0, NULL);
+#endif
     if (!swr || swr_init(swr) < 0) goto cleanup;
 
     fifo = av_audio_fifo_alloc(enc_sample_fmt, 2, frame_size);

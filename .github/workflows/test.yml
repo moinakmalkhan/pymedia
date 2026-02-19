@@ -28,7 +28,7 @@ jobs:
             libavformat-dev libavcodec-dev libavutil-dev \
             libswresample-dev libswscale-dev ffmpeg
 
-      - name: Install python-media
+      - name: Install pymedia
         run: pip install -e .
 
       - name: Install test dependencies

@@ -23,6 +23,8 @@ build/
 # pytest
 .pytest_cache/
 
+wheelhouse/
+
 # OS
 .DS_Store
 Thumbs.db

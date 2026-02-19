@@ -3,11 +3,11 @@ requires = ["setuptools>=64"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "pymedia"
+name = "python-media"
 version = "0.1.0"
 description = "In-memory video processing library powered by FFmpeg"
 readme = "README.md"
-license = "MIT"
+license = {text = "MIT"}
 requires-python = ">=3.8"
 keywords = ["video", "audio", "ffmpeg", "extract", "convert", "compress", "gif", "media"]
 classifiers = [
@@ -26,3 +26,30 @@ Issues = "https://github.com/moinakmalkhan/pymedia/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+# ── cibuildwheel ──────────────────────────────────────────────────────────────
+
+[tool.cibuildwheel]
+# Build for Python 3.9–3.12 on all platforms
+build = "cp39-* cp310-* cp311-* cp312-*"
+# Skip 32-bit and musl (Alpine) — FFmpeg dev libs not reliably available
+skip = "*-musllinux* *-manylinux_i686 *-win32"
+
+[tool.cibuildwheel.linux]
+archs = ["x86_64", "aarch64"]
+manylinux-x86_64-image = "manylinux_2_28"
+manylinux-aarch64-image = "manylinux_2_28"
+# manylinux_2_28 is AlmaLinux 8 — install FFmpeg dev libs from RPM Fusion
+before-all = """
+dnf install -y epel-release
+dnf install -y https://mirrors.rpmfusion.org/free/el/rpmfusion-free-release-8.noarch.rpm
+dnf install -y ffmpeg-devel gcc pkg-config zip
+"""
+# auditwheel bundles all FFmpeg .so files into the wheel
+repair-wheel-command = "bash /project/strip-wheel.sh {wheel} {dest_dir}"
+
+[tool.cibuildwheel.macos]
+archs = ["native"]
+before-all = "brew install ffmpeg pkg-config"
+# delocate bundles all FFmpeg dylibs into the wheel
+repair-wheel-command = "delocate-wheel --require-archs {delocate_archs} -w {dest_dir} -v {wheel}"

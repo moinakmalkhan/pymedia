@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# python-media installer — detects your OS, installs FFmpeg dev libs, builds, and installs.
+# pymedia installer — detects your OS, installs FFmpeg dev libs, builds, and installs.
 # Usage: ./install.sh
 
 set -e
@@ -9,9 +9,9 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-info()  { echo -e "${GREEN}[python-media]${NC} $1"; }
-warn()  { echo -e "${YELLOW}[python-media]${NC} $1"; }
-error() { echo -e "${RED}[python-media]${NC} $1"; exit 1; }
+info()  { echo -e "${GREEN}[pymedia]${NC} $1"; }
+warn()  { echo -e "${YELLOW}[pymedia]${NC} $1"; }
+error() { echo -e "${RED}[pymedia]${NC} $1"; exit 1; }
 
 # ── Detect OS ──
 detect_os() {
@@ -105,18 +105,18 @@ build_and_install() {
     SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
     cd "$SCRIPT_DIR"
 
-    info "Installing python-media (compiles C library automatically)..."
+    info "Installing pymedia (compiles C library automatically)..."
     pip install .
 
     info "Verifying installation..."
-    python -c "from pymedia import get_video_info; print('python-media installed successfully!')"
+    python -c "from pymedia import get_video_info; print('pymedia installed successfully!')"
 }
 
 # ── Main ──
 main() {
     echo ""
     echo "  ╔═══════════════════════════════╗"
-    echo "  ║  python-media installer v0.1.0  ║"
+    echo "  ║  pymedia installer v0.1.0  ║"
     echo "  ╚═══════════════════════════════╝"
     echo ""
 
@@ -128,7 +128,7 @@ main() {
     build_and_install
 
     echo ""
-    info "Done! You can now use python-media:"
+    info "Done! You can now use pymedia:"
     echo "    python -c \"from pymedia import extract_audio\""
     echo ""
 }

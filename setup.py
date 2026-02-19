@@ -1,7 +1,7 @@
 import subprocess
 import os
 import shutil
-from setuptools import setup
+from setuptools import setup, find_packages
 from setuptools.command.build_ext import build_ext
 from setuptools.dist import Distribution
 
@@ -39,7 +39,7 @@ class BuildSharedLib(build_ext):
         out = os.path.join(out_dir, "libpymedia.so")
 
         cmd = [
-            "gcc", "-shared", "-fPIC", "-o", out, src,
+            "gcc", "-shared", "-fPIC", "-O2", "-s", "-o", out, src,
         ] + extra_cflags + extra_ldflags + ["-lm"]
 
         print(f"Building libpymedia.so: {' '.join(cmd)}")
@@ -59,7 +59,35 @@ class CustomDist(Distribution):
 
 
 setup(
+    name="python-media",
+    version="0.1.0",
+    description="In-memory video processing library for Python, powered by FFmpeg. No temporary files, no subprocesses — everything runs in-process via ctypes.",
+    long_description=open(os.path.join(HERE, "README.md"), encoding="utf-8").read(),
+    long_description_content_type="text/markdown",
+    author="moinakmalkhan",
+    url="https://github.com/moinakmalkhan/pymedia",
+    project_urls={
+        "Bug Tracker": "https://github.com/moinakmalkhan/pymedia/issues",
+        "Source Code": "https://github.com/moinakmalkhan/pymedia",
+    },
+    license="MIT",
+    python_requires=">=3.9",
+    packages=find_packages(where="src"),
+    package_dir={"": "src"},
+    package_data={"pymedia": ["_lib/libpymedia.so"]},
+    classifiers=[
+        "License :: OSI Approved :: MIT License",
+        "Programming Language :: Python :: 3",
+        "Programming Language :: Python :: 3.9",
+        "Programming Language :: Python :: 3.10",
+        "Programming Language :: Python :: 3.11",
+        "Programming Language :: Python :: 3.12",
+        "Programming Language :: C",
+        "Operating System :: POSIX :: Linux",
+        "Operating System :: MacOS",
+        "Topic :: Multimedia :: Video",
+        "Topic :: Multimedia :: Sound/Audio",
+    ],
     cmdclass={"build_ext": BuildSharedLib},
     distclass=CustomDist,
-    package_data={"pymedia": ["_lib/libpymedia.so"]},
 )
