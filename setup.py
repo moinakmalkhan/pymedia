@@ -2,6 +2,7 @@ import os
 import shlex
 import shutil
 import subprocess
+import sys
 
 from setuptools import find_packages, setup
 from setuptools.command.build_ext import build_ext
@@ -31,6 +32,26 @@ FFMPEG_LIBS = ["libavformat", "libavcodec", "libavutil", "libswresample", "libsw
 extra_cflags = pkg_config(FFMPEG_LIBS, "--cflags")
 extra_ldflags = pkg_config(FFMPEG_LIBS, "--libs")
 
+# On Windows runners, FFmpeg zip layouts are predictable enough to provide
+# a direct fallback when pkg-config is missing or .pc files are absent.
+if sys.platform == "win32" and not extra_cflags and not extra_ldflags:
+    ffmpeg_root = os.environ.get("FFMPEG_ROOT", "C:/ffmpeg")
+    include_dir = os.path.join(ffmpeg_root, "include")
+    lib_dir = os.path.join(ffmpeg_root, "lib")
+    if os.path.isdir(include_dir):
+        extra_cflags.extend([f"-I{include_dir}"])
+    if os.path.isdir(lib_dir):
+        extra_ldflags.extend(
+            [
+                f"-L{lib_dir}",
+                "-lavformat",
+                "-lavcodec",
+                "-lavutil",
+                "-lswresample",
+                "-lswscale",
+            ]
+        )
+
 
 class BuildSharedLib(build_ext):
     """Custom build step that compiles pymedia.c into a shared library."""
@@ -45,37 +66,101 @@ class BuildSharedLib(build_ext):
             else os.path.join(HERE, "src", "pymedia", "_lib")
         )
         os.makedirs(out_dir, exist_ok=True)
-        out = os.path.join(out_dir, "libpymedia.so")
+        if sys.platform == "win32":
+            out = os.path.join(out_dir, "libpymedia.dll")
+        else:
+            out = os.path.join(out_dir, "libpymedia.so")
 
         # Respect the compiler chosen by the build environment (e.g. cibuildwheel sets CC).
         cc = os.environ.get("CC", "gcc")
 
-        # On macOS cross-compilation cibuildwheel sets ARCHFLAGS="-arch x86_64".
-        # We must forward these flags so gcc/clang produces the correct target arch.
-        arch_flags = shlex.split(os.environ.get("ARCHFLAGS", ""))
+        if sys.platform == "win32":
+            cc_basename = os.path.basename(cc).lower()
+            if cc_basename in {"gcc", "clang"} and shutil.which(cc):
+                cmd = (
+                    [
+                        cc,
+                        "-shared",
+                        "-O2",
+                        "-s",
+                        "-o",
+                        out,
+                        src,
+                    ]
+                    + extra_cflags
+                    + extra_ldflags
+                )
+                print(f"Building libpymedia.dll with {cc}: {' '.join(cmd)}")
+                subprocess.check_call(cmd)
+            else:
+                # Translate pkg-config flags to MSVC-style flags.
+                def _msvc_flags(flags):
+                    cflags = []
+                    ldflags = []
+                    for flag in flags:
+                        if flag.startswith("-I"):
+                            cflags.append("/I" + flag[2:])
+                        elif flag.startswith("-D"):
+                            cflags.append("/D" + flag[2:])
+                        elif flag.startswith("-L"):
+                            ldflags.append("/LIBPATH:" + flag[2:])
+                        elif flag.startswith("-l"):
+                            ldflags.append(flag[2:] + ".lib")
+                    return cflags, ldflags
 
-        cmd = (
-            [
-                cc,
-                "-shared",
-                "-fPIC",
-                "-O2",
-                "-s",
-                "-o",
-                out,
-                src,
-            ]
-            + arch_flags
-            + extra_cflags
-            + extra_ldflags
-            + ["-lm"]
-        )
+                cflags, ldflags = _msvc_flags(extra_cflags + extra_ldflags)
 
-        print(f"Building libpymedia.so: {' '.join(cmd)}")
-        subprocess.check_call(cmd)
+                # Use MSVC if available (cibuildwheel provides it on windows-latest).
+                cmd = (
+                    [
+                        "cl",
+                        "/nologo",
+                        "/LD",
+                        "/O2",
+                        "/MD",
+                        src,
+                        "/Fe:" + out,
+                    ]
+                    + cflags
+                    + ["/link"]
+                    + ldflags
+                )
+
+                print(f"Building libpymedia.dll with MSVC: {' '.join(cmd)}")
+                subprocess.check_call(cmd)
+        else:
+            # On macOS cross-compilation cibuildwheel sets ARCHFLAGS="-arch x86_64".
+            # We must forward these flags so gcc/clang produces the correct target arch.
+            arch_flags = shlex.split(os.environ.get("ARCHFLAGS", ""))
+
+            cmd = (
+                [
+                    cc,
+                    "-shared",
+                    "-fPIC",
+                    "-O2",
+                    "-s",
+                    "-o",
+                    out,
+                    src,
+                ]
+                + arch_flags
+                + extra_cflags
+                + extra_ldflags
+                + ["-lm"]
+            )
+
+            print(f"Building libpymedia.so: {' '.join(cmd)}")
+            subprocess.check_call(cmd)
 
         # Also copy in-place for editable installs
-        inplace_out = os.path.join(HERE, "src", "pymedia", "_lib", "libpymedia.so")
+        inplace_out = os.path.join(
+            HERE,
+            "src",
+            "pymedia",
+            "_lib",
+            "libpymedia.dll" if sys.platform == "win32" else "libpymedia.so",
+        )
         if os.path.abspath(out) != os.path.abspath(inplace_out):
             os.makedirs(os.path.dirname(inplace_out), exist_ok=True)
             shutil.copy2(out, inplace_out)
@@ -104,7 +189,7 @@ setup(
     python_requires=">=3.9",
     packages=find_packages(where="src"),
     package_dir={"": "src"},
-    package_data={"pymedia": ["_lib/libpymedia.so"]},
+    package_data={"pymedia": ["_lib/libpymedia.so", "_lib/libpymedia.dll"]},
     classifiers=[
         "License :: OSI Approved :: MIT License",
         "Programming Language :: Python :: 3",

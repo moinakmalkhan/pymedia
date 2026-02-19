@@ -1,8 +1,10 @@
 import ctypes
 import os
+import sys
 
 _LIB_DIR = os.path.join(os.path.dirname(__file__), "_lib")
-_lib = ctypes.CDLL(os.path.join(_LIB_DIR, "libpymedia.so"))
+_LIB_NAME = "libpymedia.dll" if sys.platform == "win32" else "libpymedia.so"
+_lib = ctypes.CDLL(os.path.join(_LIB_DIR, _LIB_NAME))
 
 # ── get_video_info ──
 _lib.get_video_info.argtypes = [
