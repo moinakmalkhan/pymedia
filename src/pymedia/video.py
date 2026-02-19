@@ -1,6 +1,6 @@
 import ctypes
 
-from pymedia._core import _lib, _call_bytes_fn
+from pymedia._core import _call_bytes_fn, _lib
 
 SUPPORTED_CONTAINER_FORMATS = ("mp4", "mkv", "webm", "avi", "mov", "flv", "ts")
 
@@ -16,8 +16,7 @@ def convert_format(video_data: bytes, format: str) -> bytes:
         Video bytes in the new container format.
     """
     buf = (ctypes.c_uint8 * len(video_data)).from_buffer_copy(video_data)
-    return _call_bytes_fn(_lib.convert_format, buf, len(video_data),
-                          format.encode("utf-8"))
+    return _call_bytes_fn(_lib.convert_format, buf, len(video_data), format.encode("utf-8"))
 
 
 def trim_video(video_data: bytes, start: float = 0.0, end: float = -1.0) -> bytes:
@@ -35,8 +34,9 @@ def trim_video(video_data: bytes, start: float = 0.0, end: float = -1.0) -> byte
         Trimmed video bytes.
     """
     buf = (ctypes.c_uint8 * len(video_data)).from_buffer_copy(video_data)
-    return _call_bytes_fn(_lib.trim_video, buf, len(video_data),
-                          ctypes.c_double(start), ctypes.c_double(end))
+    return _call_bytes_fn(
+        _lib.trim_video, buf, len(video_data), ctypes.c_double(start), ctypes.c_double(end)
+    )
 
 
 def mute_video(video_data: bytes) -> bytes:
@@ -66,13 +66,18 @@ def compress_video(video_data: bytes, crf: int = 23, preset: str = "medium") -> 
         Re-encoded MP4 video bytes.
     """
     buf = (ctypes.c_uint8 * len(video_data)).from_buffer_copy(video_data)
-    return _call_bytes_fn(_lib.reencode_video, buf, len(video_data),
-                          ctypes.c_int(crf), preset.encode("utf-8"),
-                          ctypes.c_int(-1), ctypes.c_int(-1))
+    return _call_bytes_fn(
+        _lib.reencode_video,
+        buf,
+        len(video_data),
+        ctypes.c_int(crf),
+        preset.encode("utf-8"),
+        ctypes.c_int(-1),
+        ctypes.c_int(-1),
+    )
 
 
-def resize_video(video_data: bytes, width: int = -1, height: int = -1,
-                 crf: int = 23) -> bytes:
+def resize_video(video_data: bytes, width: int = -1, height: int = -1, crf: int = 23) -> bytes:
     """Resize video to the given dimensions (re-encodes with H.264).
 
     If only width or height is given, the other is calculated to maintain
@@ -91,13 +96,20 @@ def resize_video(video_data: bytes, width: int = -1, height: int = -1,
         raise ValueError("At least one of width or height must be specified")
 
     buf = (ctypes.c_uint8 * len(video_data)).from_buffer_copy(video_data)
-    return _call_bytes_fn(_lib.reencode_video, buf, len(video_data),
-                          ctypes.c_int(crf), b"medium",
-                          ctypes.c_int(width), ctypes.c_int(height))
+    return _call_bytes_fn(
+        _lib.reencode_video,
+        buf,
+        len(video_data),
+        ctypes.c_int(crf),
+        b"medium",
+        ctypes.c_int(width),
+        ctypes.c_int(height),
+    )
 
 
-def video_to_gif(video_data: bytes, fps: int = 10, width: int = 320,
-                 start: float = 0.0, duration: float = -1.0) -> bytes:
+def video_to_gif(
+    video_data: bytes, fps: int = 10, width: int = 320, start: float = 0.0, duration: float = -1.0
+) -> bytes:
     """Convert video (or a segment) to an animated GIF.
 
     Args:
@@ -111,6 +123,12 @@ def video_to_gif(video_data: bytes, fps: int = 10, width: int = 320,
         GIF file bytes.
     """
     buf = (ctypes.c_uint8 * len(video_data)).from_buffer_copy(video_data)
-    return _call_bytes_fn(_lib.video_to_gif, buf, len(video_data),
-                          ctypes.c_int(fps), ctypes.c_int(width),
-                          ctypes.c_double(start), ctypes.c_double(duration))
+    return _call_bytes_fn(
+        _lib.video_to_gif,
+        buf,
+        len(video_data),
+        ctypes.c_int(fps),
+        ctypes.c_int(width),
+        ctypes.c_double(start),
+        ctypes.c_double(duration),
+    )

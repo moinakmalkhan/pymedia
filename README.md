@@ -12,15 +12,31 @@ from pymedia import extract_audio, get_video_info, trim_video
 
 ## Features
 
-- **Extract audio** — pull audio from video as mp3, wav, aac, or ogg
-- **Video info** — get duration, resolution, codecs, fps, bitrate, etc.
+**Video operations**
 - **Convert format** — remux to mp4, mkv, webm, avi, mov (fast, no re-encoding)
 - **Trim video** — cut a time segment
 - **Mute video** — strip all audio tracks
 - **Compress video** — re-encode with H.264 at a target quality (CRF)
 - **Resize video** — change resolution
-- **Extract frame** — grab a single frame as JPEG or PNG
+- **Rotate video** — rotate 90°, 180°, or 270°
+- **Change speed** — speed up or slow down playback
+- **Merge videos** — concatenate two videos sequentially
+- **Reverse video** — play video backwards
 - **Video to GIF** — convert video (or a segment) to animated GIF
+
+**Audio operations**
+- **Extract audio** — pull audio as mp3, wav, aac, or ogg
+- **Adjust volume** — increase or decrease audio volume level
+
+**Frames**
+- **Extract frame** — grab a single frame as JPEG or PNG
+- **Extract frames** — grab multiple frames at a regular interval
+- **Create thumbnail** — smart thumbnail from 1/3 into the video
+
+**Metadata**
+- **Get video info** — duration, resolution, codecs, fps, bitrate, etc.
+- **Set metadata** — write a tag (title, artist, comment, year, …)
+- **Strip metadata** — remove all metadata tags
 
 ## Installation
 
@@ -34,42 +50,102 @@ No extra dependencies needed — FFmpeg is bundled inside the package.
 
 ```python
 from pymedia import (
-    extract_audio, get_video_info, convert_format,
-    trim_video, mute_video, compress_video, resize_video,
-    extract_frame, video_to_gif,
+    get_video_info,
+    extract_audio, adjust_volume,
+    convert_format, trim_video, mute_video,
+    compress_video, resize_video, video_to_gif,
+    rotate_video, change_speed, merge_videos, reverse_video,
+    extract_frame, extract_frames, create_thumbnail,
+    set_metadata, strip_metadata,
 )
 
 with open("video.mp4", "rb") as f:
     data = f.read()
 
-# Get video metadata
+# ── Info ──────────────────────────────────────────────────────
 info = get_video_info(data)
 print(info["duration"], info["width"], info["height"])
 
-# Extract audio as mp3
+# ── Audio ─────────────────────────────────────────────────────
 mp3 = extract_audio(data, format="mp3")
+louder = adjust_volume(data, factor=2.0)   # double volume
+quieter = adjust_volume(data, factor=0.5)  # half volume
 
-# Convert to webm
+# ── Format / basic edits ──────────────────────────────────────
 webm = convert_format(data, format="webm")
-
-# Trim first 10 seconds
 clip = trim_video(data, start=0, end=10)
-
-# Remove audio
 silent = mute_video(data)
 
-# Compress (lower CRF = better quality)
+# ── Re-encode ─────────────────────────────────────────────────
 small = compress_video(data, crf=28, preset="fast")
-
-# Resize to 720p width
 resized = resize_video(data, width=1280)
 
-# Extract a frame at 5 seconds as JPEG
-frame = extract_frame(data, timestamp=5.0, format="jpeg")
+# ── Transforms ────────────────────────────────────────────────
+rotated = rotate_video(data, angle=90)          # 90, 180, 270, -90
+fast = change_speed(data, speed=2.0)            # 2x faster
+slow = change_speed(data, speed=0.5)            # half speed
+merged = merge_videos(data, other_data)
+backwards = reverse_video(data)
 
-# Convert to GIF (320px wide, 10fps, first 3 seconds)
+# ── GIF ───────────────────────────────────────────────────────
 gif = video_to_gif(data, width=320, fps=10, start=0, duration=3)
+
+# ── Frames ────────────────────────────────────────────────────
+frame = extract_frame(data, timestamp=5.0, format="jpeg")
+frames = extract_frames(data, interval=1.0)     # one frame per second
+thumb = create_thumbnail(data)                  # frame from 1/3 in
+
+# ── Metadata ──────────────────────────────────────────────────
+tagged = set_metadata(data, key="title", value="My Video")
+clean = strip_metadata(data)
 ```
+
+## API reference
+
+### Video info
+
+```python
+get_video_info(video_data) -> dict
+```
+Returns a dict with keys: `duration`, `width`, `height`, `fps`, `video_codec`,
+`audio_codec`, `bitrate`, `sample_rate`, `channels`, `has_video`, `has_audio`, `num_streams`.
+
+### Audio
+
+| Function | Description |
+|---|---|
+| `extract_audio(data, format="mp3")` | Extract audio track. Formats: `mp3`, `wav`, `aac`, `ogg` |
+| `adjust_volume(data, factor)` | Multiply audio volume. `2.0` = louder, `0.5` = quieter |
+
+### Video transforms
+
+| Function | Description |
+|---|---|
+| `convert_format(data, format)` | Remux to `mp4`, `mkv`, `webm`, `avi`, `mov`, `flv`, `ts` |
+| `trim_video(data, start, end)` | Cut to time range (seconds) |
+| `mute_video(data)` | Remove all audio streams |
+| `compress_video(data, crf=23, preset="medium")` | Re-encode H.264. CRF 0–51, lower = better quality |
+| `resize_video(data, width=-1, height=-1, crf=23)` | Resize, maintaining aspect ratio |
+| `rotate_video(data, angle)` | Rotate `90`, `180`, `270`, or `-90` degrees |
+| `change_speed(data, speed)` | `2.0` = 2× faster, `0.5` = half speed |
+| `merge_videos(data1, data2)` | Concatenate two videos |
+| `reverse_video(data)` | Play backwards (audio dropped) |
+| `video_to_gif(data, fps=10, width=320, start=0, duration=-1)` | Animated GIF |
+
+### Frames
+
+| Function | Description |
+|---|---|
+| `extract_frame(data, timestamp=0.0, format="jpeg")` | Single frame as JPEG or PNG |
+| `extract_frames(data, interval=1.0, format="jpeg")` | List of frames at regular intervals |
+| `create_thumbnail(data, format="jpeg")` | Frame from 1/3 into the video |
+
+### Metadata
+
+| Function | Description |
+|---|---|
+| `set_metadata(data, key, value)` | Set a tag (`title`, `artist`, `comment`, `year`, …) |
+| `strip_metadata(data)` | Remove all metadata tags |
 
 ## Supported formats
 
@@ -77,8 +153,8 @@ gif = video_to_gif(data, width=320, fps=10, start=0, duration=3)
 |---|---|
 | `extract_audio` | mp3, wav, aac, ogg |
 | `convert_format` | mp4, mkv, webm, avi, mov, flv, ts |
-| `extract_frame` | jpeg, png |
-| `compress_video` / `resize_video` | H.264 mp4 output |
+| `extract_frame` / `extract_frames` / `create_thumbnail` | jpeg, png |
+| `compress_video` / `resize_video` / `rotate_video` / `reverse_video` | H.264 mp4 output |
 | `video_to_gif` | GIF |
 
 ## Platform support
@@ -86,8 +162,9 @@ gif = video_to_gif(data, width=320, fps=10, start=0, duration=3)
 | Platform | Status |
 |---|---|
 | Linux (x86_64) | Pre-built wheel |
-| Linux (ARM64) | Coming soon |
-| macOS | Coming soon |
+| Linux (ARM64) | Pre-built wheel |
+| macOS (x86_64) | Pre-built wheel |
+| macOS (arm64) | Pre-built wheel |
 | Windows (native) | Not supported |
 
 ## Contributing
@@ -141,7 +218,7 @@ git checkout -b my-feature
 2. **Make your changes.** If you're adding a new feature:
    - Add the C function in `src/pymedia/_lib/pymedia.c`
    - Add ctypes bindings in `src/pymedia/_core.py`
-   - Add the Python wrapper in the appropriate module (`audio.py`, `video.py`, `frames.py`, or `info.py`)
+   - Add the Python wrapper in the appropriate module (`audio.py`, `video.py`, `frames.py`, `transforms.py`, `metadata.py`, or `info.py`)
    - Export it from `src/pymedia/__init__.py`
    - Add tests in `tests/`
 
@@ -151,10 +228,13 @@ git checkout -b my-feature
 pip install -e .
 ```
 
-4. **Run the tests:**
+4. **Run tests and lint:**
 
 ```bash
 pytest tests/ -v
+black src/ tests/
+isort src/ tests/
+flake8 src/ tests/
 ```
 
 5. **Commit and push:**
@@ -171,12 +251,14 @@ git push origin my-feature
 
 ```
 src/pymedia/
-├── __init__.py    # Public API exports
-├── _core.py       # ctypes bindings (loads libpymedia.so)
-├── audio.py       # extract_audio
-├── video.py       # convert_format, compress, resize, trim, mute, to_gif
-├── info.py        # get_video_info
-├── frames.py      # extract_frame
+├── __init__.py      # Public API exports
+├── _core.py         # ctypes bindings (loads libpymedia.so)
+├── audio.py         # extract_audio, adjust_volume
+├── video.py         # convert_format, compress, resize, trim, mute, to_gif
+├── transforms.py    # rotate_video, change_speed, merge_videos, reverse_video
+├── frames.py        # extract_frame, extract_frames, create_thumbnail
+├── metadata.py      # set_metadata, strip_metadata
+├── info.py          # get_video_info
 └── _lib/
     ├── pymedia.c      # All C code (FFmpeg operations)
     └── libpymedia.so  # Built automatically by `pip install` (not committed to git)
@@ -188,14 +270,7 @@ src/pymedia/
 - Every new feature needs at least one test
 - Tests must not require external files — generate test data in `tests/conftest.py`
 - Run `pytest tests/ -v` before submitting a PR and make sure all tests pass
-
-### Ideas for contributions
-
-- Add new video operations (watermark, rotate, change speed, reverse, merge)
-- Improve GIF quality (palette generation)
-- Add Windows native support
-- Expand CI/CD pipeline (pre-built wheels for macOS and ARM64)
-- Improve error messages from the C layer
+- Format code with `black` and `isort` before opening a PR
 
 ### Reporting bugs
 

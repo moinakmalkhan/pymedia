@@ -1,4 +1,4 @@
-name: Tests
+name: CI
 
 on:
   push:
@@ -7,8 +7,34 @@ on:
     branches: [master]
 
 jobs:
-  test:
+  lint:
+    name: Lint
     runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install lint tools
+        run: pip install black isort flake8
+
+      - name: black — check formatting
+        run: black --check src/ tests/
+
+      - name: isort — check import order
+        run: isort --check-only src/ tests/
+
+      - name: flake8 — check style
+        run: flake8 src/ tests/
+
+  test:
+    name: Test (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    needs: lint
     strategy:
       matrix:
         python-version: ["3.9", "3.10", "3.11", "3.12"]

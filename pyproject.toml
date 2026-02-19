@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "python-media"
-version = "0.1.0"
+version = "0.2.0"
 description = "In-memory video processing library powered by FFmpeg"
 readme = "README.md"
 license = {text = "MIT"}
@@ -26,6 +26,26 @@ Issues = "https://github.com/moinakmalkhan/pymedia/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+# ── black ──────────────────────────────────────────────────────────────────────
+
+[tool.black]
+line-length = 100
+target-version = ["py39", "py310", "py311", "py312"]
+
+# ── isort ─────────────────────────────────────────────────────────────────────
+
+[tool.isort]
+profile = "black"
+line_length = 100
+
+# ── flake8 (via Flake8-pyproject or .flake8 file) ─────────────────────────────
+# flake8 doesn't read pyproject.toml natively; config lives in setup.cfg or .flake8
+
+# ── pytest ────────────────────────────────────────────────────────────────────
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
 
 # ── cibuildwheel ──────────────────────────────────────────────────────────────
 
@@ -51,5 +71,7 @@ repair-wheel-command = "bash /project/strip-wheel.sh {wheel} {dest_dir}"
 [tool.cibuildwheel.macos]
 archs = ["native"]
 before-all = "brew install ffmpeg pkg-config"
-# delocate bundles all FFmpeg dylibs into the wheel
-repair-wheel-command = "delocate-wheel --require-archs {delocate_archs} -w {dest_dir} -v {wheel}"
+# Make brew libs visible to delocate (prefix differs: /opt/homebrew on arm64, /usr/local on x86)
+environment = {DYLD_FALLBACK_LIBRARY_PATH = "$(brew --prefix)/lib"}
+# --require-archs omitted: it causes false failures on arm64 when delocate validates dylibs
+repair-wheel-command = "delocate-wheel -w {dest_dir} -v {wheel}"

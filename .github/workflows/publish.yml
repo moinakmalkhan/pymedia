@@ -1,10 +1,10 @@
 name: Release
 
-# Triggered by pushing a version tag: git tag v0.2.0 && git push origin v0.2.0
+# Triggered only by pushing a version tag: git tag v0.2.0 && git push origin v0.2.0
 on:
   push:
     tags:
-      - 'v*'
+      - 'v[0-9]+.[0-9]+.[0-9]+'
 
 jobs:
   build_linux:

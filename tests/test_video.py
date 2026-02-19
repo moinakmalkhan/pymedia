@@ -1,12 +1,18 @@
 import pytest
 
 from pymedia import (
-    get_video_info, convert_format, trim_video, mute_video,
-    compress_video, resize_video, extract_frame, video_to_gif,
+    compress_video,
+    convert_format,
+    extract_frame,
+    get_video_info,
+    mute_video,
+    resize_video,
+    trim_video,
+    video_to_gif,
 )
 
-
 # ── Info ──
+
 
 def test_get_video_info(video_data):
     info = get_video_info(video_data)
@@ -21,6 +27,7 @@ def test_get_video_info(video_data):
 
 # ── Convert format ──
 
+
 def test_convert_to_mkv(video_data):
     result = convert_format(video_data, format="matroska")
     assert len(result) > 0
@@ -29,6 +36,7 @@ def test_convert_to_mkv(video_data):
 
 # ── Trim ──
 
+
 def test_trim_video(video_data):
     trimmed = trim_video(video_data, start=0, end=0.5)
     assert len(trimmed) > 0
@@ -36,6 +44,7 @@ def test_trim_video(video_data):
 
 
 # ── Mute ──
+
 
 def test_mute_video(video_data):
     muted = mute_video(video_data)
@@ -48,12 +57,14 @@ def test_mute_video(video_data):
 
 # ── Compress ──
 
+
 def test_compress_video(video_data):
     compressed = compress_video(video_data, crf=35, preset="ultrafast")
     assert len(compressed) > 0
 
 
 # ── Resize ──
+
 
 def test_resize_video(video_data):
     resized = resize_video(video_data, width=32)
@@ -64,6 +75,7 @@ def test_resize_video(video_data):
 
 
 # ── Extract frame ──
+
 
 def test_extract_frame_jpeg(video_data):
     frame = extract_frame(video_data, timestamp=0.0, format="jpeg")
@@ -83,6 +95,7 @@ def test_extract_frame_invalid_format(video_data):
 
 
 # ── GIF ──
+
 
 def test_video_to_gif(video_data):
     gif = video_to_gif(video_data, fps=5, width=32, start=0, duration=1)

@@ -81,6 +81,69 @@ _lib.video_to_gif.argtypes = [
 ]
 _lib.video_to_gif.restype = ctypes.POINTER(ctypes.c_uint8)
 
+# ── rotate_video ──
+_lib.rotate_video.argtypes = [
+    ctypes.POINTER(ctypes.c_uint8),
+    ctypes.c_size_t,
+    ctypes.c_int,
+    ctypes.POINTER(ctypes.c_size_t),
+]
+_lib.rotate_video.restype = ctypes.POINTER(ctypes.c_uint8)
+
+# ── change_speed ──
+_lib.change_speed.argtypes = [
+    ctypes.POINTER(ctypes.c_uint8),
+    ctypes.c_size_t,
+    ctypes.c_double,
+    ctypes.POINTER(ctypes.c_size_t),
+]
+_lib.change_speed.restype = ctypes.POINTER(ctypes.c_uint8)
+
+# ── adjust_volume ──
+_lib.adjust_volume.argtypes = [
+    ctypes.POINTER(ctypes.c_uint8),
+    ctypes.c_size_t,
+    ctypes.c_double,
+    ctypes.POINTER(ctypes.c_size_t),
+]
+_lib.adjust_volume.restype = ctypes.POINTER(ctypes.c_uint8)
+
+# ── merge_videos ──
+_lib.merge_videos.argtypes = [
+    ctypes.POINTER(ctypes.c_uint8),
+    ctypes.c_size_t,
+    ctypes.POINTER(ctypes.c_uint8),
+    ctypes.c_size_t,
+    ctypes.POINTER(ctypes.c_size_t),
+]
+_lib.merge_videos.restype = ctypes.POINTER(ctypes.c_uint8)
+
+# ── reverse_video ──
+_lib.reverse_video.argtypes = [
+    ctypes.POINTER(ctypes.c_uint8),
+    ctypes.c_size_t,
+    ctypes.POINTER(ctypes.c_size_t),
+]
+_lib.reverse_video.restype = ctypes.POINTER(ctypes.c_uint8)
+
+# ── strip_metadata ──
+_lib.strip_metadata.argtypes = [
+    ctypes.POINTER(ctypes.c_uint8),
+    ctypes.c_size_t,
+    ctypes.POINTER(ctypes.c_size_t),
+]
+_lib.strip_metadata.restype = ctypes.POINTER(ctypes.c_uint8)
+
+# ── set_metadata ──
+_lib.set_metadata.argtypes = [
+    ctypes.POINTER(ctypes.c_uint8),
+    ctypes.c_size_t,
+    ctypes.c_char_p,
+    ctypes.c_char_p,
+    ctypes.POINTER(ctypes.c_size_t),
+]
+_lib.set_metadata.restype = ctypes.POINTER(ctypes.c_uint8)
+
 # ── free ──
 _lib.free.argtypes = [ctypes.c_void_p]
 _lib.free.restype = None

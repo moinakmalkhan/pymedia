@@ -1,7 +1,8 @@
-import subprocess
 import os
 import shutil
-from setuptools import setup, find_packages
+import subprocess
+
+from setuptools import find_packages, setup
 from setuptools.command.build_ext import build_ext
 from setuptools.dist import Distribution
 
@@ -11,10 +12,14 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 def pkg_config(packages, flag):
     """Run pkg-config and return the output as a list of strings."""
     try:
-        out = subprocess.check_output(
-            ["pkg-config", flag] + packages,
-            stderr=subprocess.STDOUT,
-        ).decode().strip()
+        out = (
+            subprocess.check_output(
+                ["pkg-config", flag] + packages,
+                stderr=subprocess.STDOUT,
+            )
+            .decode()
+            .strip()
+        )
         return out.split() if out else []
     except (subprocess.CalledProcessError, FileNotFoundError):
         return []
@@ -33,14 +38,29 @@ class BuildSharedLib(build_ext):
         src = os.path.join(HERE, "src", "pymedia", "_lib", "pymedia.c")
 
         # Build into build_lib for wheel
-        out_dir = os.path.join(self.build_lib, "pymedia", "_lib") if self.build_lib else \
-                  os.path.join(HERE, "src", "pymedia", "_lib")
+        out_dir = (
+            os.path.join(self.build_lib, "pymedia", "_lib")
+            if self.build_lib
+            else os.path.join(HERE, "src", "pymedia", "_lib")
+        )
         os.makedirs(out_dir, exist_ok=True)
         out = os.path.join(out_dir, "libpymedia.so")
 
-        cmd = [
-            "gcc", "-shared", "-fPIC", "-O2", "-s", "-o", out, src,
-        ] + extra_cflags + extra_ldflags + ["-lm"]
+        cmd = (
+            [
+                "gcc",
+                "-shared",
+                "-fPIC",
+                "-O2",
+                "-s",
+                "-o",
+                out,
+                src,
+            ]
+            + extra_cflags
+            + extra_ldflags
+            + ["-lm"]
+        )
 
         print(f"Building libpymedia.so: {' '.join(cmd)}")
         subprocess.check_call(cmd)
@@ -54,13 +74,14 @@ class BuildSharedLib(build_ext):
 
 class CustomDist(Distribution):
     """Tell setuptools we have ext_modules so build_ext always runs."""
+
     def has_ext_modules(self):
         return True
 
 
 setup(
     name="python-media",
-    version="0.1.0",
+    version="0.2.0",
     description="In-memory video processing library for Python, powered by FFmpeg. No temporary files, no subprocesses — everything runs in-process via ctypes.",
     long_description=open(os.path.join(HERE, "README.md"), encoding="utf-8").read(),
     long_description_content_type="text/markdown",

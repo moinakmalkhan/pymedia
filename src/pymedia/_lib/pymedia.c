@@ -1,7 +1,9 @@
-// pyvideo.c — Video processing library using FFmpeg
+// pymedia.c — Video processing library using FFmpeg
 //
 // Features: audio extraction, format conversion, compression, trimming,
-//           muting, frame extraction, GIF conversion, video info
+//           muting, frame extraction, GIF conversion, video info,
+//           rotate, speed change, volume adjust, merge, reverse,
+//           metadata strip/set
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -1232,6 +1234,1022 @@ cleanup:
             avio_close_dyn_buf(ofmt_ctx->pb, &dummy);
             av_free(dummy);
         }
+        avformat_free_context(ofmt_ctx);
+    }
+    close_input(&ifmt_ctx, &input_avio_ctx);
+    return result;
+}
+
+// ============================================================
+// 7. rotate_video — rotate 90 / 180 / 270 degrees
+// ============================================================
+
+// Rotate a YUV420P frame. Returns new AVFrame (caller must av_frame_free).
+static AVFrame* rotate_yuv420p_frame(AVFrame *src, int angle) {
+    AVFrame *dst = av_frame_alloc();
+    if (!dst) return NULL;
+    dst->format = AV_PIX_FMT_YUV420P;
+
+    int W = src->width, H = src->height;
+
+    if (angle == 180) {
+        dst->width  = W;
+        dst->height = H;
+        if (av_frame_get_buffer(dst, 0) < 0) { av_frame_free(&dst); return NULL; }
+        for (int row = 0; row < H; row++)
+            for (int col = 0; col < W; col++)
+                dst->data[0][(H-1-row)*dst->linesize[0] + (W-1-col)] =
+                    src->data[0][row*src->linesize[0] + col];
+        int uW = W/2, uH = H/2;
+        for (int row = 0; row < uH; row++)
+            for (int col = 0; col < uW; col++) {
+                dst->data[1][(uH-1-row)*dst->linesize[1] + (uW-1-col)] =
+                    src->data[1][row*src->linesize[1] + col];
+                dst->data[2][(uH-1-row)*dst->linesize[2] + (uW-1-col)] =
+                    src->data[2][row*src->linesize[2] + col];
+            }
+    } else if (angle == 90) {
+        dst->width  = H;
+        dst->height = W;
+        if (av_frame_get_buffer(dst, 0) < 0) { av_frame_free(&dst); return NULL; }
+        int nW = H, nH = W, sUH = H/2;
+        int nUW = nW/2, nUH = nH/2;
+        // dst[nr][nc] = src[H-1-nc][nr]
+        for (int nr = 0; nr < nH; nr++)
+            for (int nc = 0; nc < nW; nc++)
+                dst->data[0][nr*dst->linesize[0] + nc] =
+                    src->data[0][(H-1-nc)*src->linesize[0] + nr];
+        for (int nr = 0; nr < nUH; nr++)
+            for (int nc = 0; nc < nUW; nc++) {
+                dst->data[1][nr*dst->linesize[1] + nc] =
+                    src->data[1][(sUH-1-nc)*src->linesize[1] + nr];
+                dst->data[2][nr*dst->linesize[2] + nc] =
+                    src->data[2][(sUH-1-nc)*src->linesize[2] + nr];
+            }
+    } else { // 270
+        dst->width  = H;
+        dst->height = W;
+        if (av_frame_get_buffer(dst, 0) < 0) { av_frame_free(&dst); return NULL; }
+        int nW = H, nH = W, sUW = W/2;
+        int nUW = nW/2, nUH = nH/2;
+        // dst[nr][nc] = src[nc][W-1-nr]
+        for (int nr = 0; nr < nH; nr++)
+            for (int nc = 0; nc < nW; nc++)
+                dst->data[0][nr*dst->linesize[0] + nc] =
+                    src->data[0][nc*src->linesize[0] + (W-1-nr)];
+        for (int nr = 0; nr < nUH; nr++)
+            for (int nc = 0; nc < nUW; nc++) {
+                dst->data[1][nr*dst->linesize[1] + nc] =
+                    src->data[1][nc*src->linesize[1] + (sUW-1-nr)];
+                dst->data[2][nr*dst->linesize[2] + nc] =
+                    src->data[2][nc*src->linesize[2] + (sUW-1-nr)];
+            }
+    }
+    return dst;
+}
+
+uint8_t* rotate_video(uint8_t *video_data, size_t video_size,
+                      int angle, size_t *out_size) {
+    *out_size = 0;
+    angle = ((angle % 360) + 360) % 360;
+    if (angle != 90 && angle != 180 && angle != 270) return NULL;
+
+    BufferData bd;
+    AVFormatContext *ifmt_ctx = NULL, *ofmt_ctx = NULL;
+    AVIOContext *input_avio_ctx = NULL;
+    AVCodecContext *vdec_ctx = NULL, *venc_ctx = NULL;
+    struct SwsContext *sws = NULL;
+    AVPacket *pkt = NULL, *enc_pkt = NULL;
+    AVFrame *dec_frame = NULL, *yuv_frame = NULL, *rot_frame = NULL;
+    uint8_t *output_buffer = NULL, *result = NULL;
+    int *stream_mapping = NULL;
+
+    if (open_input_memory(video_data, video_size, &ifmt_ctx, &input_avio_ctx, &bd) < 0)
+        goto cleanup;
+
+    int video_idx = find_stream(ifmt_ctx, AVMEDIA_TYPE_VIDEO);
+    if (video_idx < 0) goto cleanup;
+    int audio_idx = find_stream(ifmt_ctx, AVMEDIA_TYPE_AUDIO);
+
+    AVCodecParameters *in_vpar = ifmt_ctx->streams[video_idx]->codecpar;
+    int src_w = in_vpar->width, src_h = in_vpar->height;
+    int out_w = (angle == 90 || angle == 270) ? src_h : src_w;
+    int out_h = (angle == 90 || angle == 270) ? src_w : src_h;
+    out_w &= ~1; out_h &= ~1;
+
+    const AVCodec *vdecoder = avcodec_find_decoder(in_vpar->codec_id);
+    if (!vdecoder) goto cleanup;
+    vdec_ctx = avcodec_alloc_context3(vdecoder);
+    avcodec_parameters_to_context(vdec_ctx, in_vpar);
+    if (avcodec_open2(vdec_ctx, vdecoder, NULL) < 0) goto cleanup;
+
+    const AVCodec *vencoder = avcodec_find_encoder_by_name("libx264");
+    if (!vencoder) goto cleanup;
+    venc_ctx = avcodec_alloc_context3(vencoder);
+    venc_ctx->width    = out_w;
+    venc_ctx->height   = out_h;
+    venc_ctx->pix_fmt  = AV_PIX_FMT_YUV420P;
+    venc_ctx->time_base = ifmt_ctx->streams[video_idx]->time_base;
+    {
+        AVRational fps = av_guess_frame_rate(ifmt_ctx, ifmt_ctx->streams[video_idx], NULL);
+        if (fps.num > 0 && fps.den > 0) venc_ctx->framerate = fps;
+    }
+    av_opt_set(venc_ctx->priv_data, "crf",    "18",     0);
+    av_opt_set(venc_ctx->priv_data, "preset", "medium", 0);
+
+    avformat_alloc_output_context2(&ofmt_ctx, NULL, "mp4", NULL);
+    if (!ofmt_ctx) goto cleanup;
+    if (ofmt_ctx->oformat->flags & AVFMT_GLOBALHEADER)
+        venc_ctx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
+    if (avcodec_open2(venc_ctx, vencoder, NULL) < 0) goto cleanup;
+    if (avio_open_dyn_buf(&ofmt_ctx->pb) < 0) goto cleanup;
+
+    stream_mapping = calloc(ifmt_ctx->nb_streams, sizeof(int));
+    if (!stream_mapping) goto cleanup;
+    int out_idx = 0;
+
+    AVStream *v_out = avformat_new_stream(ofmt_ctx, NULL);
+    avcodec_parameters_from_context(v_out->codecpar, venc_ctx);
+    v_out->time_base = venc_ctx->time_base;
+    stream_mapping[video_idx] = out_idx++;
+
+    int audio_out_idx = -1;
+    if (audio_idx >= 0) {
+        AVStream *a_out = avformat_new_stream(ofmt_ctx, NULL);
+        avcodec_parameters_copy(a_out->codecpar, ifmt_ctx->streams[audio_idx]->codecpar);
+        a_out->codecpar->codec_tag = 0;
+        a_out->time_base = ifmt_ctx->streams[audio_idx]->time_base;
+        audio_out_idx = out_idx++;
+        stream_mapping[audio_idx] = audio_out_idx;
+    }
+    for (unsigned i = 0; i < ifmt_ctx->nb_streams; i++)
+        if ((int)i != video_idx && (int)i != audio_idx)
+            stream_mapping[i] = -1;
+
+    if (avformat_write_header(ofmt_ctx, NULL) < 0) goto cleanup;
+
+    sws = sws_getContext(src_w, src_h, vdec_ctx->pix_fmt,
+                         src_w, src_h, AV_PIX_FMT_YUV420P,
+                         SWS_BILINEAR, NULL, NULL, NULL);
+    if (!sws) goto cleanup;
+
+    pkt = av_packet_alloc(); enc_pkt = av_packet_alloc();
+    dec_frame = av_frame_alloc(); yuv_frame = av_frame_alloc();
+    if (!pkt || !enc_pkt || !dec_frame || !yuv_frame) goto cleanup;
+
+    yuv_frame->format = AV_PIX_FMT_YUV420P;
+    yuv_frame->width = src_w; yuv_frame->height = src_h;
+    if (av_frame_get_buffer(yuv_frame, 0) < 0) goto cleanup;
+
+    while (av_read_frame(ifmt_ctx, pkt) >= 0) {
+        if (pkt->stream_index == video_idx) {
+            if (avcodec_send_packet(vdec_ctx, pkt) >= 0) {
+                while (avcodec_receive_frame(vdec_ctx, dec_frame) == 0) {
+                    av_frame_make_writable(yuv_frame);
+                    sws_scale(sws, (const uint8_t *const *)dec_frame->data,
+                              dec_frame->linesize, 0, src_h,
+                              yuv_frame->data, yuv_frame->linesize);
+                    yuv_frame->pts = dec_frame->pts;
+                    rot_frame = rotate_yuv420p_frame(yuv_frame, angle);
+                    if (!rot_frame) continue;
+                    rot_frame->pts = yuv_frame->pts;
+                    avcodec_send_frame(venc_ctx, rot_frame);
+                    av_frame_free(&rot_frame); rot_frame = NULL;
+                    while (avcodec_receive_packet(venc_ctx, enc_pkt) == 0) {
+                        enc_pkt->stream_index = stream_mapping[video_idx];
+                        av_packet_rescale_ts(enc_pkt, venc_ctx->time_base, v_out->time_base);
+                        av_interleaved_write_frame(ofmt_ctx, enc_pkt);
+                        av_packet_unref(enc_pkt);
+                    }
+                }
+            }
+        } else if (pkt->stream_index == audio_idx && audio_out_idx >= 0) {
+            pkt->stream_index = audio_out_idx;
+            av_packet_rescale_ts(pkt, ifmt_ctx->streams[audio_idx]->time_base,
+                                 ofmt_ctx->streams[audio_out_idx]->time_base);
+            pkt->pos = -1;
+            av_interleaved_write_frame(ofmt_ctx, pkt);
+        }
+        av_packet_unref(pkt);
+    }
+    avcodec_send_packet(vdec_ctx, NULL);
+    while (avcodec_receive_frame(vdec_ctx, dec_frame) == 0) {
+        av_frame_make_writable(yuv_frame);
+        sws_scale(sws, (const uint8_t *const *)dec_frame->data,
+                  dec_frame->linesize, 0, src_h, yuv_frame->data, yuv_frame->linesize);
+        yuv_frame->pts = dec_frame->pts;
+        rot_frame = rotate_yuv420p_frame(yuv_frame, angle);
+        if (rot_frame) {
+            rot_frame->pts = yuv_frame->pts;
+            avcodec_send_frame(venc_ctx, rot_frame);
+            av_frame_free(&rot_frame); rot_frame = NULL;
+        }
+        while (avcodec_receive_packet(venc_ctx, enc_pkt) == 0) {
+            enc_pkt->stream_index = stream_mapping[video_idx];
+            av_packet_rescale_ts(enc_pkt, venc_ctx->time_base, v_out->time_base);
+            av_interleaved_write_frame(ofmt_ctx, enc_pkt);
+            av_packet_unref(enc_pkt);
+        }
+    }
+    avcodec_send_frame(venc_ctx, NULL);
+    while (avcodec_receive_packet(venc_ctx, enc_pkt) == 0) {
+        enc_pkt->stream_index = stream_mapping[video_idx];
+        av_packet_rescale_ts(enc_pkt, venc_ctx->time_base, v_out->time_base);
+        av_interleaved_write_frame(ofmt_ctx, enc_pkt);
+        av_packet_unref(enc_pkt);
+    }
+
+    av_write_trailer(ofmt_ctx);
+    {
+        int output_size = avio_close_dyn_buf(ofmt_ctx->pb, &output_buffer);
+        ofmt_ctx->pb = NULL;
+        if (output_size > 0) {
+            result = malloc(output_size);
+            if (result) { memcpy(result, output_buffer, output_size); *out_size = output_size; }
+        }
+        av_free(output_buffer);
+    }
+
+cleanup:
+    free(stream_mapping);
+    if (rot_frame)  av_frame_free(&rot_frame);
+    if (yuv_frame)  av_frame_free(&yuv_frame);
+    if (dec_frame)  av_frame_free(&dec_frame);
+    if (enc_pkt)    av_packet_free(&enc_pkt);
+    if (pkt)        av_packet_free(&pkt);
+    if (sws)        sws_freeContext(sws);
+    if (venc_ctx)   avcodec_free_context(&venc_ctx);
+    if (vdec_ctx)   avcodec_free_context(&vdec_ctx);
+    if (ofmt_ctx) {
+        if (ofmt_ctx->pb) { uint8_t *d; avio_close_dyn_buf(ofmt_ctx->pb, &d); av_free(d); }
+        avformat_free_context(ofmt_ctx);
+    }
+    close_input(&ifmt_ctx, &input_avio_ctx);
+    return result;
+}
+
+// ============================================================
+// 8. change_speed — speed up or slow down (PTS rescaling)
+// speed > 1.0 = faster, speed < 1.0 = slower
+// ============================================================
+
+uint8_t* change_speed(uint8_t *video_data, size_t video_size,
+                      double speed, size_t *out_size) {
+    *out_size = 0;
+    if (speed <= 0.0) return NULL;
+
+    BufferData bd;
+    AVFormatContext *ifmt_ctx = NULL, *ofmt_ctx = NULL;
+    AVIOContext *input_avio_ctx = NULL;
+    AVPacket *pkt = NULL;
+    uint8_t *output_buffer = NULL, *result = NULL;
+    int *stream_mapping = NULL;
+
+    if (open_input_memory(video_data, video_size, &ifmt_ctx, &input_avio_ctx, &bd) < 0)
+        goto cleanup;
+
+    avformat_alloc_output_context2(&ofmt_ctx, NULL, "mp4", NULL);
+    if (!ofmt_ctx) goto cleanup;
+    if (avio_open_dyn_buf(&ofmt_ctx->pb) < 0) goto cleanup;
+
+    stream_mapping = calloc(ifmt_ctx->nb_streams, sizeof(int));
+    if (!stream_mapping) goto cleanup;
+    int out_idx = 0;
+
+    for (unsigned i = 0; i < ifmt_ctx->nb_streams; i++) {
+        AVCodecParameters *par = ifmt_ctx->streams[i]->codecpar;
+        if (par->codec_type != AVMEDIA_TYPE_VIDEO &&
+            par->codec_type != AVMEDIA_TYPE_AUDIO) {
+            stream_mapping[i] = -1; continue;
+        }
+        AVStream *out_stream = avformat_new_stream(ofmt_ctx, NULL);
+        if (!out_stream) goto cleanup;
+        avcodec_parameters_copy(out_stream->codecpar, par);
+        out_stream->codecpar->codec_tag = 0;
+        stream_mapping[i] = out_idx++;
+    }
+    if (avformat_write_header(ofmt_ctx, NULL) < 0) goto cleanup;
+
+    pkt = av_packet_alloc();
+    if (!pkt) goto cleanup;
+
+    while (av_read_frame(ifmt_ctx, pkt) >= 0) {
+        int si = pkt->stream_index;
+        if (si < 0 || (unsigned)si >= ifmt_ctx->nb_streams || stream_mapping[si] < 0) {
+            av_packet_unref(pkt); continue;
+        }
+        AVStream *in_s  = ifmt_ctx->streams[si];
+        int out_si      = stream_mapping[si];
+        AVStream *out_s = ofmt_ctx->streams[out_si];
+
+        if (pkt->pts != AV_NOPTS_VALUE) pkt->pts      = (int64_t)(pkt->pts / speed);
+        if (pkt->dts != AV_NOPTS_VALUE) pkt->dts      = (int64_t)(pkt->dts / speed);
+        if (pkt->duration > 0)          pkt->duration  = (int64_t)(pkt->duration / speed);
+
+        pkt->stream_index = out_si;
+        av_packet_rescale_ts(pkt, in_s->time_base, out_s->time_base);
+        pkt->pos = -1;
+        av_interleaved_write_frame(ofmt_ctx, pkt);
+        av_packet_unref(pkt);
+    }
+
+    av_write_trailer(ofmt_ctx);
+    {
+        int output_size = avio_close_dyn_buf(ofmt_ctx->pb, &output_buffer);
+        ofmt_ctx->pb = NULL;
+        if (output_size > 0) {
+            result = malloc(output_size);
+            if (result) { memcpy(result, output_buffer, output_size); *out_size = output_size; }
+        }
+        av_free(output_buffer);
+    }
+
+cleanup:
+    free(stream_mapping);
+    if (pkt) av_packet_free(&pkt);
+    if (ofmt_ctx) {
+        if (ofmt_ctx->pb) { uint8_t *d; avio_close_dyn_buf(ofmt_ctx->pb, &d); av_free(d); }
+        avformat_free_context(ofmt_ctx);
+    }
+    close_input(&ifmt_ctx, &input_avio_ctx);
+    return result;
+}
+
+// ============================================================
+// 9. adjust_volume — change audio volume level
+// factor > 1.0 amplifies, < 1.0 reduces, 0.0 = silence
+// ============================================================
+
+uint8_t* adjust_volume(uint8_t *video_data, size_t video_size,
+                       double factor, size_t *out_size) {
+    *out_size = 0;
+    if (factor < 0.0) factor = 0.0;
+
+    BufferData bd;
+    AVFormatContext *ifmt_ctx = NULL, *ofmt_ctx = NULL;
+    AVIOContext *input_avio_ctx = NULL;
+    AVCodecContext *adec_ctx = NULL, *aenc_ctx = NULL;
+    SwrContext *swr = NULL;
+    AVAudioFifo *fifo = NULL;
+    AVPacket *pkt = NULL, *enc_pkt = NULL;
+    AVFrame *dec_frame = NULL, *enc_frame = NULL;
+    uint8_t *output_buffer = NULL, *result = NULL;
+    int *stream_mapping = NULL;
+    uint8_t **resamp_buf = NULL;
+    int resamp_buf_size = 0;
+
+    if (open_input_memory(video_data, video_size, &ifmt_ctx, &input_avio_ctx, &bd) < 0)
+        goto cleanup;
+
+    int audio_idx = find_stream(ifmt_ctx, AVMEDIA_TYPE_AUDIO);
+    if (audio_idx < 0) goto cleanup;
+    int video_idx = find_stream(ifmt_ctx, AVMEDIA_TYPE_VIDEO);
+
+    AVCodecParameters *apar = ifmt_ctx->streams[audio_idx]->codecpar;
+    const AVCodec *adecoder = avcodec_find_decoder(apar->codec_id);
+    if (!adecoder) goto cleanup;
+    adec_ctx = avcodec_alloc_context3(adecoder);
+    avcodec_parameters_to_context(adec_ctx, apar);
+    if (avcodec_open2(adec_ctx, adecoder, NULL) < 0) goto cleanup;
+
+    const AVCodec *aencoder = avcodec_find_encoder(AV_CODEC_ID_AAC);
+    if (!aencoder) goto cleanup;
+    aenc_ctx = avcodec_alloc_context3(aencoder);
+    aenc_ctx->sample_rate = adec_ctx->sample_rate > 0 ? adec_ctx->sample_rate : 44100;
+    aenc_ctx->sample_fmt  = AV_SAMPLE_FMT_FLTP;
+    aenc_ctx->bit_rate    = 128000;
+    aenc_ctx->time_base   = (AVRational){1, aenc_ctx->sample_rate};
+#if FF_NEW_CHANNEL_LAYOUT
+    if (adec_ctx->ch_layout.nb_channels > 0)
+        av_channel_layout_copy(&aenc_ctx->ch_layout, &adec_ctx->ch_layout);
+    else
+        av_channel_layout_default(&aenc_ctx->ch_layout, 2);
+#else
+    aenc_ctx->channel_layout = adec_ctx->channel_layout
+        ? adec_ctx->channel_layout : AV_CH_LAYOUT_STEREO;
+    aenc_ctx->channels = av_get_channel_layout_nb_channels(aenc_ctx->channel_layout);
+#endif
+
+    avformat_alloc_output_context2(&ofmt_ctx, NULL, "mp4", NULL);
+    if (!ofmt_ctx) goto cleanup;
+    if (ofmt_ctx->oformat->flags & AVFMT_GLOBALHEADER)
+        aenc_ctx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
+    if (avcodec_open2(aenc_ctx, aencoder, NULL) < 0) goto cleanup;
+    if (avio_open_dyn_buf(&ofmt_ctx->pb) < 0) goto cleanup;
+
+    int frame_size = aenc_ctx->frame_size > 0 ? aenc_ctx->frame_size : 1024;
+
+#if FF_NEW_CHANNEL_LAYOUT
+    {
+        AVChannelLayout out_layout, in_layout;
+        av_channel_layout_copy(&out_layout, &aenc_ctx->ch_layout);
+        if (adec_ctx->ch_layout.nb_channels > 0)
+            av_channel_layout_copy(&in_layout, &adec_ctx->ch_layout);
+        else
+            av_channel_layout_default(&in_layout, 2);
+        swr_alloc_set_opts2(&swr, &out_layout, AV_SAMPLE_FMT_FLTP, aenc_ctx->sample_rate,
+                            &in_layout, adec_ctx->sample_fmt, adec_ctx->sample_rate, 0, NULL);
+        av_channel_layout_uninit(&out_layout);
+        av_channel_layout_uninit(&in_layout);
+    }
+#else
+    swr = swr_alloc_set_opts(NULL,
+        aenc_ctx->channel_layout, AV_SAMPLE_FMT_FLTP, aenc_ctx->sample_rate,
+        adec_ctx->channel_layout ? adec_ctx->channel_layout
+            : av_get_default_channel_layout(adec_ctx->channels),
+        adec_ctx->sample_fmt, adec_ctx->sample_rate, 0, NULL);
+#endif
+    if (!swr || swr_init(swr) < 0) goto cleanup;
+
+#if FF_NEW_CHANNEL_LAYOUT
+    fifo = av_audio_fifo_alloc(AV_SAMPLE_FMT_FLTP, aenc_ctx->ch_layout.nb_channels, frame_size);
+#else
+    fifo = av_audio_fifo_alloc(AV_SAMPLE_FMT_FLTP, aenc_ctx->channels, frame_size);
+#endif
+    if (!fifo) goto cleanup;
+
+    stream_mapping = calloc(ifmt_ctx->nb_streams, sizeof(int));
+    if (!stream_mapping) goto cleanup;
+    int out_idx = 0;
+
+    int video_out_idx = -1;
+    if (video_idx >= 0) {
+        AVStream *v_out = avformat_new_stream(ofmt_ctx, NULL);
+        avcodec_parameters_copy(v_out->codecpar, ifmt_ctx->streams[video_idx]->codecpar);
+        v_out->codecpar->codec_tag = 0;
+        v_out->time_base = ifmt_ctx->streams[video_idx]->time_base;
+        video_out_idx = out_idx++;
+        stream_mapping[video_idx] = video_out_idx;
+    }
+    AVStream *a_out = avformat_new_stream(ofmt_ctx, NULL);
+    avcodec_parameters_from_context(a_out->codecpar, aenc_ctx);
+    a_out->time_base = aenc_ctx->time_base;
+    int audio_out_idx = out_idx++;
+    stream_mapping[audio_idx] = audio_out_idx;
+
+    for (unsigned i = 0; i < ifmt_ctx->nb_streams; i++)
+        if ((int)i != video_idx && (int)i != audio_idx)
+            stream_mapping[i] = -1;
+
+    if (avformat_write_header(ofmt_ctx, NULL) < 0) goto cleanup;
+
+    pkt = av_packet_alloc(); enc_pkt = av_packet_alloc();
+    dec_frame = av_frame_alloc(); enc_frame = av_frame_alloc();
+    if (!pkt || !enc_pkt || !dec_frame || !enc_frame) goto cleanup;
+
+    int64_t pts_counter = 0;
+
+    while (av_read_frame(ifmt_ctx, pkt) >= 0) {
+        if (pkt->stream_index == video_idx && video_out_idx >= 0) {
+            pkt->stream_index = video_out_idx;
+            av_packet_rescale_ts(pkt, ifmt_ctx->streams[video_idx]->time_base,
+                                 ofmt_ctx->streams[video_out_idx]->time_base);
+            pkt->pos = -1;
+            av_interleaved_write_frame(ofmt_ctx, pkt);
+        } else if (pkt->stream_index == audio_idx) {
+            if (avcodec_send_packet(adec_ctx, pkt) >= 0) {
+                while (avcodec_receive_frame(adec_ctx, dec_frame) == 0) {
+                    // Apply volume to float planar samples
+                    if (dec_frame->format == AV_SAMPLE_FMT_FLTP) {
+#if FF_NEW_CHANNEL_LAYOUT
+                        int nch = dec_frame->ch_layout.nb_channels;
+#else
+                        int nch = dec_frame->channels;
+#endif
+                        for (int ch = 0; ch < nch; ch++) {
+                            float *s = (float *)dec_frame->data[ch];
+                            for (int n = 0; n < dec_frame->nb_samples; n++) {
+                                float v = s[n] * (float)factor;
+                                s[n] = v > 1.0f ? 1.0f : (v < -1.0f ? -1.0f : v);
+                            }
+                        }
+                    }
+                    int out_samples = swr_get_out_samples(swr, dec_frame->nb_samples);
+                    if (out_samples <= 0) continue;
+                    if (out_samples > resamp_buf_size) {
+                        if (resamp_buf) av_freep(&resamp_buf[0]);
+                        av_freep(&resamp_buf);
+#if FF_NEW_CHANNEL_LAYOUT
+                        av_samples_alloc_array_and_samples(&resamp_buf, NULL,
+                            aenc_ctx->ch_layout.nb_channels, out_samples, AV_SAMPLE_FMT_FLTP, 0);
+#else
+                        av_samples_alloc_array_and_samples(&resamp_buf, NULL,
+                            aenc_ctx->channels, out_samples, AV_SAMPLE_FMT_FLTP, 0);
+#endif
+                        resamp_buf_size = out_samples;
+                    }
+                    int converted = swr_convert(swr, resamp_buf, out_samples,
+                                                (const uint8_t **)dec_frame->data,
+                                                dec_frame->nb_samples);
+                    if (converted > 0) {
+                        av_audio_fifo_write(fifo, (void **)resamp_buf, converted);
+                        encode_fifo_frames(fifo, aenc_ctx, ofmt_ctx, a_out,
+                                           enc_pkt, enc_frame, frame_size, &pts_counter);
+                    }
+                }
+            }
+        }
+        av_packet_unref(pkt);
+    }
+
+    avcodec_send_packet(adec_ctx, NULL);
+    while (avcodec_receive_frame(adec_ctx, dec_frame) == 0) {
+        int out_samples = swr_get_out_samples(swr, dec_frame->nb_samples);
+        if (out_samples > 0) {
+            if (out_samples > resamp_buf_size) {
+                if (resamp_buf) av_freep(&resamp_buf[0]);
+                av_freep(&resamp_buf);
+#if FF_NEW_CHANNEL_LAYOUT
+                av_samples_alloc_array_and_samples(&resamp_buf, NULL,
+                    aenc_ctx->ch_layout.nb_channels, out_samples, AV_SAMPLE_FMT_FLTP, 0);
+#else
+                av_samples_alloc_array_and_samples(&resamp_buf, NULL,
+                    aenc_ctx->channels, out_samples, AV_SAMPLE_FMT_FLTP, 0);
+#endif
+                resamp_buf_size = out_samples;
+            }
+            int converted = swr_convert(swr, resamp_buf, out_samples,
+                                        (const uint8_t **)dec_frame->data, dec_frame->nb_samples);
+            if (converted > 0) {
+                av_audio_fifo_write(fifo, (void **)resamp_buf, converted);
+                encode_fifo_frames(fifo, aenc_ctx, ofmt_ctx, a_out,
+                                   enc_pkt, enc_frame, frame_size, &pts_counter);
+            }
+        }
+    }
+    encode_fifo_remaining(fifo, aenc_ctx, ofmt_ctx, a_out, enc_pkt, enc_frame, &pts_counter);
+    avcodec_send_frame(aenc_ctx, NULL);
+    while (avcodec_receive_packet(aenc_ctx, enc_pkt) == 0) {
+        enc_pkt->stream_index = audio_out_idx;
+        av_packet_rescale_ts(enc_pkt, aenc_ctx->time_base, a_out->time_base);
+        av_interleaved_write_frame(ofmt_ctx, enc_pkt);
+        av_packet_unref(enc_pkt);
+    }
+
+    av_write_trailer(ofmt_ctx);
+    {
+        int output_size = avio_close_dyn_buf(ofmt_ctx->pb, &output_buffer);
+        ofmt_ctx->pb = NULL;
+        if (output_size > 0) {
+            result = malloc(output_size);
+            if (result) { memcpy(result, output_buffer, output_size); *out_size = output_size; }
+        }
+        av_free(output_buffer);
+    }
+    if (resamp_buf) { av_freep(&resamp_buf[0]); av_freep(&resamp_buf); }
+
+cleanup:
+    free(stream_mapping);
+    if (enc_frame) av_frame_free(&enc_frame);
+    if (dec_frame) av_frame_free(&dec_frame);
+    if (enc_pkt)   av_packet_free(&enc_pkt);
+    if (pkt)       av_packet_free(&pkt);
+    if (fifo)      av_audio_fifo_free(fifo);
+    if (swr)       swr_free(&swr);
+    if (aenc_ctx)  avcodec_free_context(&aenc_ctx);
+    if (adec_ctx)  avcodec_free_context(&adec_ctx);
+    if (ofmt_ctx) {
+        if (ofmt_ctx->pb) { uint8_t *d; avio_close_dyn_buf(ofmt_ctx->pb, &d); av_free(d); }
+        avformat_free_context(ofmt_ctx);
+    }
+    close_input(&ifmt_ctx, &input_avio_ctx);
+    return result;
+}
+
+// ============================================================
+// 10. merge_videos — concatenate two videos sequentially
+// ============================================================
+
+uint8_t* merge_videos(uint8_t *data1, size_t size1,
+                      uint8_t *data2, size_t size2,
+                      size_t *out_size) {
+    *out_size = 0;
+
+    BufferData bd1, bd2;
+    AVFormatContext *ifmt1 = NULL, *ifmt2 = NULL, *ofmt_ctx = NULL;
+    AVIOContext *avio1 = NULL, *avio2 = NULL;
+    AVPacket *pkt = NULL;
+    uint8_t *output_buffer = NULL, *result = NULL;
+    int *map1 = NULL, *map2 = NULL;
+    int64_t *last_dts = NULL, *last_dur = NULL, *dts_offset = NULL;
+
+    if (open_input_memory(data1, size1, &ifmt1, &avio1, &bd1) < 0) goto cleanup;
+    if (open_input_memory(data2, size2, &ifmt2, &avio2, &bd2) < 0) goto cleanup;
+
+    avformat_alloc_output_context2(&ofmt_ctx, NULL, "mp4", NULL);
+    if (!ofmt_ctx) goto cleanup;
+    if (avio_open_dyn_buf(&ofmt_ctx->pb) < 0) goto cleanup;
+
+    map1 = calloc(ifmt1->nb_streams, sizeof(int));
+    map2 = calloc(ifmt2->nb_streams, sizeof(int));
+    if (!map1 || !map2) goto cleanup;
+
+    int out_idx = 0;
+    for (unsigned i = 0; i < ifmt1->nb_streams; i++) {
+        AVCodecParameters *par = ifmt1->streams[i]->codecpar;
+        if (par->codec_type != AVMEDIA_TYPE_VIDEO &&
+            par->codec_type != AVMEDIA_TYPE_AUDIO) { map1[i] = -1; continue; }
+        AVStream *out_s = avformat_new_stream(ofmt_ctx, NULL);
+        avcodec_parameters_copy(out_s->codecpar, par);
+        out_s->codecpar->codec_tag = 0;
+        map1[i] = out_idx++;
+    }
+
+    // Map input2 streams to output by media type
+    for (unsigned i = 0; i < ifmt2->nb_streams; i++) {
+        map2[i] = -1;
+        for (unsigned j = 0; j < ifmt1->nb_streams; j++) {
+            if (map1[j] >= 0 &&
+                ifmt1->streams[j]->codecpar->codec_type ==
+                ifmt2->streams[i]->codecpar->codec_type) {
+                map2[i] = map1[j]; break;
+            }
+        }
+    }
+
+    if (avformat_write_header(ofmt_ctx, NULL) < 0) goto cleanup;
+
+    last_dts   = calloc(out_idx, sizeof(int64_t));
+    last_dur   = calloc(out_idx, sizeof(int64_t));
+    dts_offset = calloc(out_idx, sizeof(int64_t));
+    if (!last_dts || !last_dur || !dts_offset) goto cleanup;
+
+    pkt = av_packet_alloc();
+    if (!pkt) goto cleanup;
+
+    // Write input1
+    while (av_read_frame(ifmt1, pkt) >= 0) {
+        int si = pkt->stream_index;
+        if (si < 0 || (unsigned)si >= ifmt1->nb_streams || map1[si] < 0) {
+            av_packet_unref(pkt); continue;
+        }
+        AVStream *in_s  = ifmt1->streams[si];
+        int out_si      = map1[si];
+        AVStream *out_s = ofmt_ctx->streams[out_si];
+        pkt->stream_index = out_si;
+        av_packet_rescale_ts(pkt, in_s->time_base, out_s->time_base);
+        pkt->pos = -1;
+        if (pkt->dts != AV_NOPTS_VALUE) {
+            last_dts[out_si] = pkt->dts;
+            last_dur[out_si] = pkt->duration > 0 ? pkt->duration : 1;
+        }
+        av_interleaved_write_frame(ofmt_ctx, pkt);
+        av_packet_unref(pkt);
+    }
+
+    for (int i = 0; i < out_idx; i++)
+        dts_offset[i] = last_dts[i] + last_dur[i];
+
+    // Write input2 with offset
+    while (av_read_frame(ifmt2, pkt) >= 0) {
+        int si = pkt->stream_index;
+        if (si < 0 || (unsigned)si >= ifmt2->nb_streams || map2[si] < 0) {
+            av_packet_unref(pkt); continue;
+        }
+        AVStream *in_s  = ifmt2->streams[si];
+        int out_si      = map2[si];
+        AVStream *out_s = ofmt_ctx->streams[out_si];
+        av_packet_rescale_ts(pkt, in_s->time_base, out_s->time_base);
+        if (pkt->pts != AV_NOPTS_VALUE) pkt->pts += dts_offset[out_si];
+        if (pkt->dts != AV_NOPTS_VALUE) pkt->dts += dts_offset[out_si];
+        pkt->stream_index = out_si;
+        pkt->pos = -1;
+        av_interleaved_write_frame(ofmt_ctx, pkt);
+        av_packet_unref(pkt);
+    }
+
+    av_write_trailer(ofmt_ctx);
+    {
+        int output_size = avio_close_dyn_buf(ofmt_ctx->pb, &output_buffer);
+        ofmt_ctx->pb = NULL;
+        if (output_size > 0) {
+            result = malloc(output_size);
+            if (result) { memcpy(result, output_buffer, output_size); *out_size = output_size; }
+        }
+        av_free(output_buffer);
+    }
+
+cleanup:
+    free(last_dts); free(last_dur); free(dts_offset);
+    free(map1); free(map2);
+    if (pkt) av_packet_free(&pkt);
+    if (ofmt_ctx) {
+        if (ofmt_ctx->pb) { uint8_t *d; avio_close_dyn_buf(ofmt_ctx->pb, &d); av_free(d); }
+        avformat_free_context(ofmt_ctx);
+    }
+    close_input(&ifmt1, &avio1);
+    close_input(&ifmt2, &avio2);
+    return result;
+}
+
+// ============================================================
+// 11. reverse_video — reverse video playback (audio dropped)
+// ============================================================
+
+uint8_t* reverse_video(uint8_t *video_data, size_t video_size,
+                       size_t *out_size) {
+    *out_size = 0;
+
+    BufferData bd;
+    AVFormatContext *ifmt_ctx = NULL, *ofmt_ctx = NULL;
+    AVIOContext *input_avio_ctx = NULL;
+    AVCodecContext *vdec_ctx = NULL, *venc_ctx = NULL;
+    struct SwsContext *sws = NULL;
+    AVPacket *pkt = NULL, *enc_pkt = NULL;
+    AVFrame *dec_frame = NULL, *yuv_frame = NULL;
+    AVFrame **frames = NULL;
+    int frame_count = 0, frame_cap = 0;
+    uint8_t *output_buffer = NULL, *result = NULL;
+
+    if (open_input_memory(video_data, video_size, &ifmt_ctx, &input_avio_ctx, &bd) < 0)
+        goto cleanup;
+
+    int video_idx = find_stream(ifmt_ctx, AVMEDIA_TYPE_VIDEO);
+    if (video_idx < 0) goto cleanup;
+
+    AVCodecParameters *in_vpar = ifmt_ctx->streams[video_idx]->codecpar;
+    int src_w = in_vpar->width, src_h = in_vpar->height;
+
+    const AVCodec *vdecoder = avcodec_find_decoder(in_vpar->codec_id);
+    if (!vdecoder) goto cleanup;
+    vdec_ctx = avcodec_alloc_context3(vdecoder);
+    avcodec_parameters_to_context(vdec_ctx, in_vpar);
+    if (avcodec_open2(vdec_ctx, vdecoder, NULL) < 0) goto cleanup;
+
+    const AVCodec *vencoder = avcodec_find_encoder_by_name("libx264");
+    if (!vencoder) goto cleanup;
+    venc_ctx = avcodec_alloc_context3(vencoder);
+    venc_ctx->width    = src_w & ~1;
+    venc_ctx->height   = src_h & ~1;
+    venc_ctx->pix_fmt  = AV_PIX_FMT_YUV420P;
+    venc_ctx->time_base = ifmt_ctx->streams[video_idx]->time_base;
+    {
+        AVRational fps = av_guess_frame_rate(ifmt_ctx, ifmt_ctx->streams[video_idx], NULL);
+        if (fps.num > 0 && fps.den > 0) venc_ctx->framerate = fps;
+    }
+    av_opt_set(venc_ctx->priv_data, "crf",    "18",     0);
+    av_opt_set(venc_ctx->priv_data, "preset", "medium", 0);
+
+    avformat_alloc_output_context2(&ofmt_ctx, NULL, "mp4", NULL);
+    if (!ofmt_ctx) goto cleanup;
+    if (ofmt_ctx->oformat->flags & AVFMT_GLOBALHEADER)
+        venc_ctx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
+    if (avcodec_open2(venc_ctx, vencoder, NULL) < 0) goto cleanup;
+    if (avio_open_dyn_buf(&ofmt_ctx->pb) < 0) goto cleanup;
+
+    AVStream *v_out = avformat_new_stream(ofmt_ctx, NULL);
+    avcodec_parameters_from_context(v_out->codecpar, venc_ctx);
+    v_out->time_base = venc_ctx->time_base;
+    if (avformat_write_header(ofmt_ctx, NULL) < 0) goto cleanup;
+
+    sws = sws_getContext(src_w, src_h, vdec_ctx->pix_fmt,
+                         src_w & ~1, src_h & ~1, AV_PIX_FMT_YUV420P,
+                         SWS_BILINEAR, NULL, NULL, NULL);
+    if (!sws) goto cleanup;
+
+    pkt = av_packet_alloc(); enc_pkt = av_packet_alloc();
+    dec_frame = av_frame_alloc();
+    if (!pkt || !enc_pkt || !dec_frame) goto cleanup;
+
+    // Decode all video frames
+    while (av_read_frame(ifmt_ctx, pkt) >= 0) {
+        if (pkt->stream_index == video_idx &&
+            avcodec_send_packet(vdec_ctx, pkt) >= 0) {
+            while (avcodec_receive_frame(vdec_ctx, dec_frame) == 0) {
+                if (frame_count >= frame_cap) {
+                    int new_cap = frame_cap ? frame_cap * 2 : 64;
+                    AVFrame **tmp = realloc(frames, new_cap * sizeof(AVFrame *));
+                    if (!tmp) goto encode;
+                    frames = tmp; frame_cap = new_cap;
+                }
+                frames[frame_count] = av_frame_clone(dec_frame);
+                if (frames[frame_count]) frame_count++;
+            }
+        }
+        av_packet_unref(pkt);
+    }
+    avcodec_send_packet(vdec_ctx, NULL);
+    while (avcodec_receive_frame(vdec_ctx, dec_frame) == 0) {
+        if (frame_count < frame_cap) {
+            frames[frame_count] = av_frame_clone(dec_frame);
+            if (frames[frame_count]) frame_count++;
+        }
+    }
+
+encode:
+    yuv_frame = av_frame_alloc();
+    if (!yuv_frame) goto cleanup;
+    yuv_frame->format = AV_PIX_FMT_YUV420P;
+    yuv_frame->width  = src_w & ~1;
+    yuv_frame->height = src_h & ~1;
+    if (av_frame_get_buffer(yuv_frame, 0) < 0) goto cleanup;
+
+    for (int i = frame_count - 1; i >= 0; i--) {
+        AVFrame *f = frames[i];
+        av_frame_make_writable(yuv_frame);
+        sws_scale(sws, (const uint8_t *const *)f->data, f->linesize, 0, src_h,
+                  yuv_frame->data, yuv_frame->linesize);
+        yuv_frame->pts = (int64_t)(frame_count - 1 - i);
+        avcodec_send_frame(venc_ctx, yuv_frame);
+        while (avcodec_receive_packet(venc_ctx, enc_pkt) == 0) {
+            enc_pkt->stream_index = 0;
+            av_packet_rescale_ts(enc_pkt, venc_ctx->time_base, v_out->time_base);
+            av_interleaved_write_frame(ofmt_ctx, enc_pkt);
+            av_packet_unref(enc_pkt);
+        }
+    }
+    avcodec_send_frame(venc_ctx, NULL);
+    while (avcodec_receive_packet(venc_ctx, enc_pkt) == 0) {
+        enc_pkt->stream_index = 0;
+        av_packet_rescale_ts(enc_pkt, venc_ctx->time_base, v_out->time_base);
+        av_interleaved_write_frame(ofmt_ctx, enc_pkt);
+        av_packet_unref(enc_pkt);
+    }
+
+    av_write_trailer(ofmt_ctx);
+    {
+        int output_size = avio_close_dyn_buf(ofmt_ctx->pb, &output_buffer);
+        ofmt_ctx->pb = NULL;
+        if (output_size > 0) {
+            result = malloc(output_size);
+            if (result) { memcpy(result, output_buffer, output_size); *out_size = output_size; }
+        }
+        av_free(output_buffer);
+    }
+
+cleanup:
+    if (frames) {
+        for (int i = 0; i < frame_count; i++)
+            if (frames[i]) av_frame_free(&frames[i]);
+        free(frames);
+    }
+    if (yuv_frame) av_frame_free(&yuv_frame);
+    if (dec_frame) av_frame_free(&dec_frame);
+    if (enc_pkt)   av_packet_free(&enc_pkt);
+    if (pkt)       av_packet_free(&pkt);
+    if (sws)       sws_freeContext(sws);
+    if (venc_ctx)  avcodec_free_context(&venc_ctx);
+    if (vdec_ctx)  avcodec_free_context(&vdec_ctx);
+    if (ofmt_ctx) {
+        if (ofmt_ctx->pb) { uint8_t *d; avio_close_dyn_buf(ofmt_ctx->pb, &d); av_free(d); }
+        avformat_free_context(ofmt_ctx);
+    }
+    close_input(&ifmt_ctx, &input_avio_ctx);
+    return result;
+}
+
+// ============================================================
+// 12. strip_metadata — remove all metadata tags
+// ============================================================
+
+uint8_t* strip_metadata(uint8_t *video_data, size_t video_size,
+                        size_t *out_size) {
+    *out_size = 0;
+    BufferData bd;
+    AVFormatContext *ifmt_ctx = NULL, *ofmt_ctx = NULL;
+    AVIOContext *input_avio_ctx = NULL;
+    AVPacket *pkt = NULL;
+    uint8_t *output_buffer = NULL, *result = NULL;
+    int *stream_mapping = NULL;
+
+    if (open_input_memory(video_data, video_size, &ifmt_ctx, &input_avio_ctx, &bd) < 0)
+        goto cleanup;
+
+    avformat_alloc_output_context2(&ofmt_ctx, NULL, "mp4", NULL);
+    if (!ofmt_ctx) goto cleanup;
+    if (avio_open_dyn_buf(&ofmt_ctx->pb) < 0) goto cleanup;
+
+    stream_mapping = calloc(ifmt_ctx->nb_streams, sizeof(int));
+    if (!stream_mapping) goto cleanup;
+    int out_idx = 0;
+
+    for (unsigned i = 0; i < ifmt_ctx->nb_streams; i++) {
+        AVCodecParameters *par = ifmt_ctx->streams[i]->codecpar;
+        if (par->codec_type != AVMEDIA_TYPE_VIDEO &&
+            par->codec_type != AVMEDIA_TYPE_AUDIO) { stream_mapping[i] = -1; continue; }
+        AVStream *out_s = avformat_new_stream(ofmt_ctx, NULL);
+        avcodec_parameters_copy(out_s->codecpar, par);
+        out_s->codecpar->codec_tag = 0;
+        stream_mapping[i] = out_idx++;
+    }
+    av_dict_free(&ofmt_ctx->metadata);  // clear container metadata
+    if (avformat_write_header(ofmt_ctx, NULL) < 0) goto cleanup;
+
+    pkt = av_packet_alloc();
+    if (!pkt) goto cleanup;
+
+    while (av_read_frame(ifmt_ctx, pkt) >= 0) {
+        int si = pkt->stream_index;
+        if (si < 0 || (unsigned)si >= ifmt_ctx->nb_streams || stream_mapping[si] < 0) {
+            av_packet_unref(pkt); continue;
+        }
+        AVStream *in_s  = ifmt_ctx->streams[si];
+        int out_si      = stream_mapping[si];
+        AVStream *out_s = ofmt_ctx->streams[out_si];
+        pkt->stream_index = out_si;
+        av_packet_rescale_ts(pkt, in_s->time_base, out_s->time_base);
+        pkt->pos = -1;
+        av_interleaved_write_frame(ofmt_ctx, pkt);
+        av_packet_unref(pkt);
+    }
+
+    av_write_trailer(ofmt_ctx);
+    {
+        int output_size = avio_close_dyn_buf(ofmt_ctx->pb, &output_buffer);
+        ofmt_ctx->pb = NULL;
+        if (output_size > 0) {
+            result = malloc(output_size);
+            if (result) { memcpy(result, output_buffer, output_size); *out_size = output_size; }
+        }
+        av_free(output_buffer);
+    }
+
+cleanup:
+    free(stream_mapping);
+    if (pkt) av_packet_free(&pkt);
+    if (ofmt_ctx) {
+        if (ofmt_ctx->pb) { uint8_t *d; avio_close_dyn_buf(ofmt_ctx->pb, &d); av_free(d); }
+        avformat_free_context(ofmt_ctx);
+    }
+    close_input(&ifmt_ctx, &input_avio_ctx);
+    return result;
+}
+
+// ============================================================
+// 13. set_metadata — set a metadata key/value on the container
+// ============================================================
+
+uint8_t* set_metadata(uint8_t *video_data, size_t video_size,
+                      const char *key, const char *value,
+                      size_t *out_size) {
+    *out_size = 0;
+    if (!key || !value) return NULL;
+
+    BufferData bd;
+    AVFormatContext *ifmt_ctx = NULL, *ofmt_ctx = NULL;
+    AVIOContext *input_avio_ctx = NULL;
+    AVPacket *pkt = NULL;
+    uint8_t *output_buffer = NULL, *result = NULL;
+    int *stream_mapping = NULL;
+
+    if (open_input_memory(video_data, video_size, &ifmt_ctx, &input_avio_ctx, &bd) < 0)
+        goto cleanup;
+
+    avformat_alloc_output_context2(&ofmt_ctx, NULL, "mp4", NULL);
+    if (!ofmt_ctx) goto cleanup;
+    if (avio_open_dyn_buf(&ofmt_ctx->pb) < 0) goto cleanup;
+
+    stream_mapping = calloc(ifmt_ctx->nb_streams, sizeof(int));
+    if (!stream_mapping) goto cleanup;
+    int out_idx = 0;
+
+    for (unsigned i = 0; i < ifmt_ctx->nb_streams; i++) {
+        AVCodecParameters *par = ifmt_ctx->streams[i]->codecpar;
+        if (par->codec_type != AVMEDIA_TYPE_VIDEO &&
+            par->codec_type != AVMEDIA_TYPE_AUDIO) { stream_mapping[i] = -1; continue; }
+        AVStream *out_s = avformat_new_stream(ofmt_ctx, NULL);
+        avcodec_parameters_copy(out_s->codecpar, par);
+        out_s->codecpar->codec_tag = 0;
+        stream_mapping[i] = out_idx++;
+    }
+    av_dict_copy(&ofmt_ctx->metadata, ifmt_ctx->metadata, 0);
+    av_dict_set(&ofmt_ctx->metadata, key, value, 0);
+    if (avformat_write_header(ofmt_ctx, NULL) < 0) goto cleanup;
+
+    pkt = av_packet_alloc();
+    if (!pkt) goto cleanup;
+
+    while (av_read_frame(ifmt_ctx, pkt) >= 0) {
+        int si = pkt->stream_index;
+        if (si < 0 || (unsigned)si >= ifmt_ctx->nb_streams || stream_mapping[si] < 0) {
+            av_packet_unref(pkt); continue;
+        }
+        AVStream *in_s  = ifmt_ctx->streams[si];
+        int out_si      = stream_mapping[si];
+        AVStream *out_s = ofmt_ctx->streams[out_si];
+        pkt->stream_index = out_si;
+        av_packet_rescale_ts(pkt, in_s->time_base, out_s->time_base);
+        pkt->pos = -1;
+        av_interleaved_write_frame(ofmt_ctx, pkt);
+        av_packet_unref(pkt);
+    }
+
+    av_write_trailer(ofmt_ctx);
+    {
+        int output_size = avio_close_dyn_buf(ofmt_ctx->pb, &output_buffer);
+        ofmt_ctx->pb = NULL;
+        if (output_size > 0) {
+            result = malloc(output_size);
+            if (result) { memcpy(result, output_buffer, output_size); *out_size = output_size; }
+        }
+        av_free(output_buffer);
+    }
+
+cleanup:
+    free(stream_mapping);
+    if (pkt) av_packet_free(&pkt);
+    if (ofmt_ctx) {
+        if (ofmt_ctx->pb) { uint8_t *d; avio_close_dyn_buf(ofmt_ctx->pb, &d); av_free(d); }
         avformat_free_context(ofmt_ctx);
     }
     close_input(&ifmt_ctx, &input_avio_ctx);
