@@ -71,7 +71,7 @@ repair-wheel-command = "bash /project/strip-wheel.sh {wheel} {dest_dir}"
 [tool.cibuildwheel.macos]
 archs = ["native"]
 before-all = "brew install ffmpeg pkg-config"
-# Make brew libs visible to delocate (prefix differs: /opt/homebrew on arm64, /usr/local on x86)
-environment = {DYLD_FALLBACK_LIBRARY_PATH = "$(brew --prefix)/lib"}
-# --require-archs omitted: it causes false failures on arm64 when delocate validates dylibs
-repair-wheel-command = "delocate-wheel -w {dest_dir} -v {wheel}"
+# DYLD_LIBRARY_PATH is set inline in repair-wheel-command because cibuildwheel's
+# `environment` key only applies to the build step, not to repair-wheel-command.
+# brew --prefix resolves to /opt/homebrew on arm64 and /usr/local on x86_64.
+repair-wheel-command = "DYLD_LIBRARY_PATH=$(brew --prefix)/lib delocate-wheel -w {dest_dir} -v {wheel}"
