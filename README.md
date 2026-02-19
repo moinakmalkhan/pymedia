@@ -163,9 +163,9 @@ Returns a dict with keys: `duration`, `width`, `height`, `fps`, `video_codec`,
 |---|---|
 | Linux (x86_64) | Pre-built wheel |
 | Linux (ARM64) | Pre-built wheel |
-| macOS (x86_64) | Pre-built wheel |
-| macOS (arm64) | Pre-built wheel |
-| Windows (native) | Not supported |
+| macOS (arm64, Apple Silicon) | Pre-built wheel (requires macOS 14+) |
+| macOS (x86_64, Intel) | Pre-built wheel (cross-compiled via Rosetta 2, requires macOS 14+) |
+| Windows (x86_64) | Pre-built wheel (FFmpeg bundled via delvewheel) |
 
 ## Contributing
 
@@ -190,18 +190,39 @@ sudo apt install gcc pkg-config \
 
 # macOS
 brew install gcc pkg-config ffmpeg
+
+# Windows
+# Download the latest shared build from https://github.com/BtbN/FFmpeg-Builds/releases
+# (pick ffmpeg-master-latest-win64-gpl-shared.zip), extract to C:\ffmpeg, and install pkg-config:
+choco install pkgconfiglite -y
+# Then add C:\ffmpeg\bin to your PATH and set:
+# PKG_CONFIG_PATH=C:\ffmpeg\lib\pkgconfig
 ```
 
 3. **Create a virtual environment and install in dev mode:**
 
 ```bash
+# Linux / macOS
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e .
 pip install pytest
+
+# Windows (PowerShell)
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+pip install -e .
+pip install pytest
 ```
 
-4. **Run the tests:**
+4. **Install pre-commit hooks** (optional but recommended — runs black, isort, flake8 before every commit):
+
+```bash
+pip install pre-commit
+pre-commit install
+```
+
+5. **Run the tests:**
 
 ```bash
 pytest tests/ -v
@@ -237,6 +258,8 @@ isort src/ tests/
 flake8 src/ tests/
 ```
 
+If you installed pre-commit hooks (step 4 of setup), formatting and lint checks run automatically on `git commit`.
+
 5. **Commit and push:**
 
 ```bash
@@ -261,7 +284,7 @@ src/pymedia/
 ├── info.py          # get_video_info
 └── _lib/
     ├── pymedia.c      # All C code (FFmpeg operations)
-    └── libpymedia.so  # Built automatically by `pip install` (not committed to git)
+    └── libpymedia.so  # Built automatically by `pip install` (libpymedia.dylib on macOS, pymedia.dll on Windows — not committed to git)
 ```
 
 ### Guidelines

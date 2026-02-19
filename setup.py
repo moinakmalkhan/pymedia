@@ -1,4 +1,5 @@
 import os
+import shlex
 import shutil
 import subprocess
 
@@ -46,9 +47,16 @@ class BuildSharedLib(build_ext):
         os.makedirs(out_dir, exist_ok=True)
         out = os.path.join(out_dir, "libpymedia.so")
 
+        # Respect the compiler chosen by the build environment (e.g. cibuildwheel sets CC).
+        cc = os.environ.get("CC", "gcc")
+
+        # On macOS cross-compilation cibuildwheel sets ARCHFLAGS="-arch x86_64".
+        # We must forward these flags so gcc/clang produces the correct target arch.
+        arch_flags = shlex.split(os.environ.get("ARCHFLAGS", ""))
+
         cmd = (
             [
-                "gcc",
+                cc,
                 "-shared",
                 "-fPIC",
                 "-O2",
@@ -57,6 +65,7 @@ class BuildSharedLib(build_ext):
                 out,
                 src,
             ]
+            + arch_flags
             + extra_cflags
             + extra_ldflags
             + ["-lm"]
