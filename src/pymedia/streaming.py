@@ -7,7 +7,7 @@ from typing import Any
 
 from pymedia._core import _call_bytes_fn, _lib
 from pymedia.analysis import list_keyframes
-from pymedia.audio import transcode_audio
+from pymedia.audio import extract_audio
 from pymedia.info import get_video_info
 from pymedia.video import convert_format, split_video, transcode_video
 
@@ -114,7 +114,7 @@ def analyze_loudness(data: bytes) -> dict[str, float]:
     Returns:
         Dict containing RMS/peak dBFS and audio stream properties.
     """
-    wav = transcode_audio(data, format="wav")
+    wav = extract_audio(data, format="wav")
     import io
     import wave
     from array import array

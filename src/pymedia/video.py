@@ -577,7 +577,13 @@ def apply_filtergraph(
                 raise ValueError(f"Unsupported video filter token: {f}")
 
     if audio_filters:
-        from pymedia.audio import adjust_volume, fade_audio, normalize_audio_lufs, silence_remove
+        from pymedia.audio import (
+            adjust_volume,
+            fade_audio,
+            normalize_audio_lufs,
+            silence_remove,
+            transcode_audio,
+        )
 
         if isinstance(audio_filters, str):
             a_filters = [f.strip() for f in audio_filters.split(",") if f.strip()]
@@ -592,15 +598,18 @@ def apply_filtergraph(
                 if "=" in f:
                     target = float(f.split("=", 1)[1])
                 normalized = normalize_audio_lufs(out, target=target)
-                out = replace_audio(out, normalized, trim=True)
+                normalized_aac = transcode_audio(normalized, format="aac")
+                out = replace_audio(out, normalized_aac, trim=True)
             elif f.startswith("fadein="):
                 fade = float(f.split("=", 1)[1])
                 faded = fade_audio(out, in_sec=fade, out_sec=0.0)
-                out = replace_audio(out, faded, trim=True)
+                faded_aac = transcode_audio(faded, format="aac")
+                out = replace_audio(out, faded_aac, trim=True)
             elif f.startswith("fadeout="):
                 fade = float(f.split("=", 1)[1])
                 faded = fade_audio(out, in_sec=0.0, out_sec=fade)
-                out = replace_audio(out, faded, trim=True)
+                faded_aac = transcode_audio(faded, format="aac")
+                out = replace_audio(out, faded_aac, trim=True)
             elif f.startswith("silenceremove"):
                 threshold_db = -40.0
                 min_silence = 0.3
@@ -612,7 +621,8 @@ def apply_filtergraph(
                     if len(parts) > 1 and parts[1]:
                         min_silence = float(parts[1])
                 compact = silence_remove(out, threshold_db=threshold_db, min_silence=min_silence)
-                out = replace_audio(out, compact, trim=True)
+                compact_aac = transcode_audio(compact, format="aac")
+                out = replace_audio(out, compact_aac, trim=True)
             else:
                 raise ValueError(f"Unsupported audio filter token: {f}")
     return out

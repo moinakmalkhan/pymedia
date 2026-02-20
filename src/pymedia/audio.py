@@ -219,8 +219,7 @@ def fade_audio(data: bytes, in_sec: float = 0.0, out_sec: float = 0.0) -> bytes:
     """
     if in_sec < 0 or out_sec < 0:
         raise ValueError("in_sec and out_sec must be >= 0")
-    wav = transcode_audio(data, format="wav")
-    samples, channels, sample_rate = _decode_wav_pcm16(wav)
+    samples, channels, sample_rate = _decode_or_transcode_wav_pcm16(data)
 
     total_frames = len(samples) // channels
     fade_in_frames = min(int(in_sec * sample_rate), total_frames)
@@ -250,17 +249,16 @@ def normalize_audio_lufs(data: bytes, target: float = -16.0) -> bytes:
     Returns:
         WAV bytes with gain adjustment.
     """
-    wav = transcode_audio(data, format="wav")
-    samples, channels, sample_rate = _decode_wav_pcm16(wav)
+    samples, channels, sample_rate = _decode_or_transcode_wav_pcm16(data)
     if len(samples) == 0:
-        return wav
+        return _encode_wav_pcm16(samples, channels, sample_rate)
 
     acc = 0.0
     for s in samples:
         acc += float(s) * float(s)
     rms = math.sqrt(acc / len(samples))
     if rms <= 0:
-        return wav
+        return _encode_wav_pcm16(samples, channels, sample_rate)
 
     current_dbfs = 20.0 * math.log10(rms / 32767.0)
     gain_db = target - current_dbfs
@@ -287,8 +285,7 @@ def silence_detect(
     """
     if min_silence <= 0:
         raise ValueError("min_silence must be > 0")
-    wav = transcode_audio(data, format="wav")
-    samples, channels, sample_rate = _decode_wav_pcm16(wav)
+    samples, channels, sample_rate = _decode_or_transcode_wav_pcm16(data)
     return _find_silence_ranges(
         samples,
         channels=channels,
@@ -301,7 +298,7 @@ def silence_detect(
 def silence_remove(data: bytes, threshold_db: float = -40.0, min_silence: float = 0.3) -> bytes:
     """Remove silent regions from media/audio and return compacted WAV audio.
 
-    The input is first transcoded to 16-bit PCM WAV, then scanned frame-by-frame.
+    The input is decoded to 16-bit PCM WAV, then scanned frame-by-frame.
     Any contiguous region whose peak amplitude stays below `threshold_db` for at
     least `min_silence` seconds is removed. Non-silent regions are preserved in
     their original order without crossfades.
@@ -321,11 +318,10 @@ def silence_remove(data: bytes, threshold_db: float = -40.0, min_silence: float 
     """
     if min_silence <= 0:
         raise ValueError("min_silence must be > 0")
-    wav = transcode_audio(data, format="wav")
-    samples, channels, sample_rate = _decode_wav_pcm16(wav)
+    samples, channels, sample_rate = _decode_or_transcode_wav_pcm16(data)
     total_frames = len(samples) // channels
     if total_frames == 0:
-        return wav
+        return _encode_wav_pcm16(samples, channels, sample_rate)
 
     ranges = _find_silence_ranges(
         samples,
@@ -335,7 +331,7 @@ def silence_remove(data: bytes, threshold_db: float = -40.0, min_silence: float 
         min_silence=min_silence,
     )
     if not ranges:
-        return wav
+        return _encode_wav_pcm16(samples, channels, sample_rate)
 
     keep = array("h")
     cursor = 0
