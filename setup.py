@@ -215,7 +215,7 @@ class CustomDist(Distribution):
 
 setup(
     name="python-media",
-    version="0.2.0",
+    version="0.2.1",
     description="In-memory video processing library for Python, powered by FFmpeg. No temporary files, no subprocesses — everything runs in-process via ctypes.",
     long_description=open(os.path.join(HERE, "README.md"), encoding="utf-8").read(),
     long_description_content_type="text/markdown",
