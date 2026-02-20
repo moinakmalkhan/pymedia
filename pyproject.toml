@@ -17,6 +17,7 @@ classifiers = [
     "Operating System :: MacOS",
     "Topic :: Multimedia :: Video :: Conversion",
     "Topic :: Multimedia :: Sound/Audio :: Conversion",
+    "Topic :: Multimedia :: Video :: Nonlinear Editor"
 ]
 
 [project.urls]
@@ -31,7 +32,7 @@ where = ["src"]
 
 [tool.black]
 line-length = 100
-target-version = ["py39", "py310", "py311", "py312"]
+target-version = ["py39", "py310", "py311", "py312", "py313"]
 
 # ── isort ─────────────────────────────────────────────────────────────────────
 
@@ -50,10 +51,13 @@ testpaths = ["tests"]
 # ── cibuildwheel ──────────────────────────────────────────────────────────────
 
 [tool.cibuildwheel]
-# Build for Python 3.9–3.12 on all platforms
-build = "cp39-* cp310-* cp311-* cp312-*"
+# Build for Python 3.9–3.13 on all platforms
+build = "cp39-* cp310-* cp311-* cp312-* cp313-*"
 # Skip 32-bit and musl (Alpine) — FFmpeg dev libs not reliably available
 skip = "*-musllinux* *-manylinux_i686 *-win32"
+# Run full test suite against each built wheel in a matching interpreter.
+test-requires = ["pytest"]
+test-command = "pytest -q {project}/tests"
 
 [tool.cibuildwheel.linux]
 archs = ["x86_64", "aarch64"]
@@ -75,3 +79,11 @@ before-all = "brew install ffmpeg pkg-config"
 # `environment` key only applies to the build step, not to repair-wheel-command.
 # brew --prefix resolves to /opt/homebrew on arm64 and /usr/local on x86_64.
 repair-wheel-command = "DYLD_LIBRARY_PATH=$(brew --prefix)/lib delocate-wheel -w {dest_dir} -v {wheel}"
+
+[tool.cibuildwheel.windows]
+before-all = "python -m pip install delvewheel"
+# Ensure FFmpeg DLLs are bundled into the wheel so users don't need a separate FFmpeg install.
+repair-wheel-command = "delvewheel repair --add-path \"%FFMPEG_ROOT%\\\\bin\" -w {dest_dir} {wheel}"
+
+[tool.cibuildwheel.windows.environment]
+FFMPEG_ROOT = "C:\\\\ffmpeg"

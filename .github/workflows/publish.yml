@@ -3,82 +3,95 @@ name: Release
 # Triggered only by pushing a version tag: git tag v0.2.0 && git push origin v0.2.0
 on:
   push:
-    branches:
-      - MK/adding-windows-support
-    # tags:
-    #   - 'v[0-9]+.[0-9]+.[0-9]+'
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
 
 jobs:
-  # build_linux:
-  #   name: Build Linux wheels
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - uses: actions/checkout@v4
+  build_linux:
+    name: Build Linux wheels
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
 
-  #     - name: Set up QEMU (for ARM64 emulation)
-  #       uses: docker/setup-qemu-action@v3
-  #       with:
-  #         platforms: arm64
+      - name: Set up QEMU (for ARM64 emulation)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
 
-  #     - name: Build wheels
-  #       uses: pypa/cibuildwheel@v2.21.3
+      - name: Build wheels
+        uses: pypa/cibuildwheel@v2.21.3
 
-  #     - uses: actions/upload-artifact@v4
-  #       with:
-  #         name: wheels-linux
-  #         path: ./wheelhouse/*.whl
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-linux
+          path: ./wheelhouse/*.whl
 
-  # build_macos_arm:
-  #   name: Build macOS arm64 wheels
-  #   runs-on: macos-14
-  #   env:
-  #     # Homebrew FFmpeg on macOS 14 arm64 requires deployment target 14.0.
-  #     # Setting this here tags the wheel as macosx_14_0_arm64 so delocate doesn't reject it.
-  #     CIBW_ENVIRONMENT_MACOS: "MACOSX_DEPLOYMENT_TARGET=14.0 DYLD_LIBRARY_PATH=$(brew --prefix)/lib"
-  #   steps:
-  #     - uses: actions/checkout@v4
+  build_macos_arm:
+    name: Build macOS arm64 wheels
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - runner: macos-14
+            deployment_target: "14.0"
+          - runner: macos-15
+            deployment_target: "15.0"
+    env:
+      # Build both macOS 14 and macOS 15 arm64 wheel tags.
+      CIBW_ENVIRONMENT_MACOS: "MACOSX_DEPLOYMENT_TARGET=${{ matrix.deployment_target }} DYLD_LIBRARY_PATH=$(brew --prefix)/lib"
+    steps:
+      - uses: actions/checkout@v4
 
-  #     - name: Build wheels
-  #       uses: pypa/cibuildwheel@v2.21.3
+      - name: Build wheels
+        uses: pypa/cibuildwheel@v2.21.3
 
-  #     - uses: actions/upload-artifact@v4
-  #       with:
-  #         name: wheels-macos-arm
-  #         path: ./wheelhouse/*.whl
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-macos-arm-${{ matrix.deployment_target }}
+          path: ./wheelhouse/*.whl
 
-  # build_macos_x86:
-  #   name: Build macOS x86_64 wheels (cross-compiled on arm64)
-  #   runs-on: macos-14
-  #   env:
-  #     CIBW_ARCHS_MACOS: "x86_64"
-  #     # Install Rosetta 2 and an x86_64 Homebrew prefix (/usr/local), then install FFmpeg for that arch.
-  #     CIBW_BEFORE_ALL_MACOS: >
-  #       softwareupdate --install-rosetta --agree-to-license || true &&
-  #       arch -x86_64 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" < /dev/null || true &&
-  #       arch -x86_64 /usr/local/bin/brew install ffmpeg pkg-config
-  #     # x86_64 Homebrew lives at /usr/local, not /opt/homebrew.
-  #     # FFmpeg from Homebrew on macos-14 requires deployment target 14.0 regardless of arch.
-  #     CIBW_ENVIRONMENT_MACOS: "MACOSX_DEPLOYMENT_TARGET=14.0 PKG_CONFIG_PATH=/usr/local/opt/ffmpeg/lib/pkgconfig DYLD_LIBRARY_PATH=/usr/local/lib"
-  #     CIBW_REPAIR_WHEEL_COMMAND_MACOS: "DYLD_LIBRARY_PATH=/usr/local/lib delocate-wheel -w {dest_dir} -v {wheel}"
-  #   steps:
-  #     - uses: actions/checkout@v4
+  build_macos_x86:
+    name: Build macOS x86_64 wheels (cross-compiled on arm64)
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - runner: macos-14
+            deployment_target: "14.0"
+          - runner: macos-15
+            deployment_target: "15.0"
+    env:
+      CIBW_ARCHS_MACOS: "x86_64"
+      # Install Rosetta 2 and an x86_64 Homebrew prefix (/usr/local), then install FFmpeg for that arch.
+      CIBW_BEFORE_ALL_MACOS: >
+        softwareupdate --install-rosetta --agree-to-license || true &&
+        arch -x86_64 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" < /dev/null || true &&
+        arch -x86_64 /usr/local/bin/brew install ffmpeg pkg-config
+      # x86_64 Homebrew lives at /usr/local, not /opt/homebrew.
+      # Build both macOS 14 and macOS 15 x86_64 wheel tags.
+      CIBW_ENVIRONMENT_MACOS: "MACOSX_DEPLOYMENT_TARGET=${{ matrix.deployment_target }} PKG_CONFIG_PATH=/usr/local/opt/ffmpeg/lib/pkgconfig DYLD_LIBRARY_PATH=/usr/local/lib"
+      CIBW_REPAIR_WHEEL_COMMAND_MACOS: "DYLD_LIBRARY_PATH=/usr/local/lib delocate-wheel -w {dest_dir} -v {wheel}"
+    steps:
+      - uses: actions/checkout@v4
 
-  #     - name: Build wheels
-  #       uses: pypa/cibuildwheel@v2.21.3
+      - name: Build wheels
+        uses: pypa/cibuildwheel@v2.21.3
 
-  #     - uses: actions/upload-artifact@v4
-  #       with:
-  #         name: wheels-macos-x86
-  #         path: ./wheelhouse/*.whl
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-macos-x86-${{ matrix.deployment_target }}
+          path: ./wheelhouse/*.whl
 
   build_windows:
     name: Build Windows x86_64 wheels
     runs-on: windows-latest
     env:
       CIBW_ARCHS_WINDOWS: "AMD64"
+      FFMPEG_ROOT: "C:/ffmpeg"
+      # Build with MinGW gcc so FFmpeg import libraries from BtbN builds link reliably.
       CIBW_ENVIRONMENT_WINDOWS: "FFMPEG_ROOT=C:/ffmpeg CC=gcc"
-      # delvewheel bundles the FFmpeg .dll files into the wheel (equivalent to auditwheel on Linux).
-      CIBW_REPAIR_WHEEL_COMMAND_WINDOWS: "delvewheel repair -w {dest_dir} {wheel} --add-path C:/ffmpeg/bin"
+      # Bundle FFmpeg + MinGW runtime DLLs into repaired wheel.
+      CIBW_REPAIR_WHEEL_COMMAND_WINDOWS: "delvewheel repair --add-path C:/ffmpeg/bin;C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin -w {dest_dir} {wheel}"
       CIBW_BUILD_VERBOSITY: "1"
     steps:
       - uses: actions/checkout@v4
@@ -102,48 +115,21 @@ jobs:
           Expand-Archive -Path "$env:TEMP\ffmpeg.zip" -DestinationPath "$env:TEMP\ffmpeg_extract"
           # The zip contains a single top-level folder whose name varies by build date; move it to C:\ffmpeg.
           $src = Get-ChildItem "$env:TEMP\ffmpeg_extract" -Directory | Select-Object -First 1
-          Move-Item $src.FullName "C:\ffmpeg"
+          Move-Item $src.FullName "$env:FFMPEG_ROOT"
           # Add the bin dir to PATH so delvewheel can locate the .dll files at repair time.
-          "C:\ffmpeg\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-
-      - name: Install delvewheel
-        run: pip install delvewheel
-
-      - name: Build libpymedia.dll explicitly
-        shell: pwsh
-        run: |
-          if (!(Test-Path "C:\ffmpeg\include\libavformat\avformat.h")) {
-            throw "FFmpeg headers not found at C:\ffmpeg\include"
-          }
-          gcc `
-            -shared -O2 -s `
-            -IC:/ffmpeg/include `
-            -LC:/ffmpeg/lib `
-            -o src/pymedia/_lib/libpymedia.dll `
-            src/pymedia/_lib/pymedia.c `
-            -lavformat -lavcodec -lavutil -lswresample -lswscale
-          if (!(Test-Path "src/pymedia/_lib/libpymedia.dll")) {
-            throw "libpymedia.dll was not created"
-          }
-          Get-Item "src/pymedia/_lib/libpymedia.dll" | Format-List FullName,Length
+          "$env:FFMPEG_ROOT\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Build wheels
         uses: pypa/cibuildwheel@v2.21.3
 
-      - name: Validate Windows wheels contain libpymedia.dll
+      - name: Inspect wheel dependencies (delvewheel show)
         shell: pwsh
         run: |
+          pip install delvewheel
           $wheels = Get-ChildItem wheelhouse/*.whl
-          if ($wheels.Count -eq 0) {
-            throw "No wheel files were produced"
-          }
           foreach ($wheel in $wheels) {
-            Write-Host "Inspecting $($wheel.Name)"
-            $entries = tar -tf $wheel.FullName
-            if (-not ($entries | Select-String -SimpleMatch "pymedia/_lib/libpymedia.dll")) {
-              throw "Missing pymedia/_lib/libpymedia.dll in $($wheel.Name)"
-            }
-            Get-Item $wheel.FullName | Format-List FullName,Length
+            Write-Host "delvewheel show $($wheel.Name)"
+            python -m delvewheel show $wheel.FullName
           }
 
       - uses: actions/upload-artifact@v4
@@ -151,48 +137,48 @@ jobs:
           name: wheels-windows
           path: ./wheelhouse/*.whl
 
-  # build_sdist:
-  #   name: Build source distribution
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - uses: actions/checkout@v4
+  build_sdist:
+    name: Build source distribution
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
 
-  #     - name: Install system dependencies
-  #       run: |
-  #         sudo apt-get update -qq
-  #         sudo apt-get install -y gcc pkg-config \
-  #           libavformat-dev libavcodec-dev libavutil-dev \
-  #           libswresample-dev libswscale-dev
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y gcc pkg-config \
+            libavformat-dev libavcodec-dev libavutil-dev \
+            libswresample-dev libswscale-dev
 
-  #     - name: Build sdist
-  #       run: pipx run build --sdist
+      - name: Build sdist
+        run: pipx run build --sdist
 
-  #     - uses: actions/upload-artifact@v4
-  #       with:
-  #         name: wheels-sdist
-  #         path: dist/*.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-sdist
+          path: dist/*.tar.gz
 
-  # release:
-  #   name: Create GitHub Release and publish to PyPI
-  #   needs: [build_linux, build_macos_arm, build_macos_x86, build_windows, build_sdist]
-  #   runs-on: ubuntu-latest
-  #   permissions:
-  #     contents: write   # required to create GitHub Releases
+  release:
+    name: Create GitHub Release and publish to PyPI
+    needs: [build_linux, build_macos_arm, build_macos_x86, build_windows, build_sdist]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # required to create GitHub Releases
 
-  #   steps:
-  #     - uses: actions/download-artifact@v4
-  #       with:
-  #         pattern: wheels-*
-  #         path: dist
-  #         merge-multiple: true
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-*
+          path: dist
+          merge-multiple: true
 
-  #     - name: Create GitHub Release
-  #       uses: softprops/action-gh-release@v2
-  #       with:
-  #         files: dist/*
-  #         generate_release_notes: true   # auto-generates notes from merged PRs/commits
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true   # auto-generates notes from merged PRs/commits
 
-  #     - name: Publish to PyPI
-  #       uses: pypa/gh-action-pypi-publish@release/v1
-  #       with:
-  #         password: ${{ secrets.PYPI_TOKEN }}
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_TOKEN }}

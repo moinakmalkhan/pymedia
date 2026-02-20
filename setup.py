@@ -68,6 +68,8 @@ class BuildSharedLib(build_ext):
         os.makedirs(out_dir, exist_ok=True)
         if sys.platform == "win32":
             out = os.path.join(out_dir, "libpymedia.dll")
+        elif sys.platform == "darwin":
+            out = os.path.join(out_dir, "libpymedia.dylib")
         else:
             out = os.path.join(out_dir, "libpymedia.so")
 
@@ -133,25 +135,52 @@ class BuildSharedLib(build_ext):
             # We must forward these flags so gcc/clang produces the correct target arch.
             arch_flags = shlex.split(os.environ.get("ARCHFLAGS", ""))
 
-            cmd = (
-                [
-                    cc,
-                    "-shared",
-                    "-fPIC",
-                    "-O2",
-                    "-s",
-                    "-o",
-                    out,
-                    src,
-                ]
-                + arch_flags
-                + extra_cflags
-                + extra_ldflags
-                + ["-lm"]
-            )
+            if sys.platform == "darwin":
+                cmd = (
+                    [
+                        cc,
+                        "-shared",
+                        "-fPIC",
+                        "-O2",
+                        "-o",
+                        out,
+                        src,
+                    ]
+                    + arch_flags
+                    + extra_cflags
+                    + extra_ldflags
+                )
+            else:
+                cmd = (
+                    [
+                        cc,
+                        "-shared",
+                        "-fPIC",
+                        "-O2",
+                        "-s",
+                        "-o",
+                        out,
+                        src,
+                    ]
+                    + arch_flags
+                    + extra_cflags
+                    + extra_ldflags
+                    + ["-lm"]
+                )
 
-            print(f"Building libpymedia.so: {' '.join(cmd)}")
-            subprocess.check_call(cmd)
+        print(f"Building libpymedia.so: {' '.join(cmd)}")
+        subprocess.check_call(cmd)
+
+        if sys.platform == "win32":
+            ffmpeg_root = os.environ.get("FFMPEG_ROOT", "C:/ffmpeg")
+            ffmpeg_bin = os.path.join(ffmpeg_root, "bin")
+            if os.path.isdir(ffmpeg_bin):
+                for name in os.listdir(ffmpeg_bin):
+                    if name.lower().endswith(".dll"):
+                        src_dll = os.path.join(ffmpeg_bin, name)
+                        shutil.copy2(src_dll, out_dir)
+            else:
+                print(f"Warning: FFmpeg bin directory not found: {ffmpeg_bin}")
 
         # Also copy in-place for editable installs
         inplace_out = os.path.join(
@@ -159,11 +188,22 @@ class BuildSharedLib(build_ext):
             "src",
             "pymedia",
             "_lib",
-            "libpymedia.dll" if sys.platform == "win32" else "libpymedia.so",
+            "libpymedia.dll"
+            if sys.platform == "win32"
+            else "libpymedia.dylib"
+            if sys.platform == "darwin"
+            else "libpymedia.so",
         )
         if os.path.abspath(out) != os.path.abspath(inplace_out):
             os.makedirs(os.path.dirname(inplace_out), exist_ok=True)
             shutil.copy2(out, inplace_out)
+            if sys.platform == "win32":
+                for name in os.listdir(out_dir):
+                    if name.lower().endswith(".dll") and name != "libpymedia.dll":
+                        shutil.copy2(
+                            os.path.join(out_dir, name),
+                            os.path.join(os.path.dirname(inplace_out), name),
+                        )
 
 
 class CustomDist(Distribution):
@@ -189,7 +229,13 @@ setup(
     python_requires=">=3.9",
     packages=find_packages(where="src"),
     package_dir={"": "src"},
-    package_data={"pymedia": ["_lib/libpymedia.so", "_lib/libpymedia.dll"]},
+    package_data={
+        "pymedia": [
+            "_lib/libpymedia.so",
+            "_lib/libpymedia.dylib",
+            "_lib/*.dll",
+        ]
+    },
     classifiers=[
         "License :: OSI Approved :: MIT License",
         "Programming Language :: Python :: 3",
@@ -197,9 +243,11 @@ setup(
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
         "Programming Language :: Python :: 3.12",
+        "Programming Language :: Python :: 3.13",
         "Programming Language :: C",
         "Operating System :: POSIX :: Linux",
         "Operating System :: MacOS",
+        "Operating System :: Microsoft :: Windows",
         "Topic :: Multimedia :: Video",
         "Topic :: Multimedia :: Sound/Audio",
     ],
