@@ -188,11 +188,11 @@ class BuildSharedLib(build_ext):
             "src",
             "pymedia",
             "_lib",
-            "libpymedia.dll"
-            if sys.platform == "win32"
-            else "libpymedia.dylib"
-            if sys.platform == "darwin"
-            else "libpymedia.so",
+            (
+                "libpymedia.dll"
+                if sys.platform == "win32"
+                else "libpymedia.dylib" if sys.platform == "darwin" else "libpymedia.so"
+            ),
         )
         if os.path.abspath(out) != os.path.abspath(inplace_out):
             os.makedirs(os.path.dirname(inplace_out), exist_ok=True)
@@ -215,7 +215,7 @@ class CustomDist(Distribution):
 
 setup(
     name="python-media",
-    version="0.2.1",
+    version="0.2.3",
     description="In-memory video processing library for Python, powered by FFmpeg. No temporary files, no subprocesses — everything runs in-process via ctypes.",
     long_description=open(os.path.join(HERE, "README.md"), encoding="utf-8").read(),
     long_description_content_type="text/markdown",

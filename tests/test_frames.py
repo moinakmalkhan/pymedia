@@ -1,6 +1,6 @@
 import pytest
 
-from pymedia import create_thumbnail, extract_frame, extract_frames
+from pymedia import create_thumbnail, extract_frame, extract_frames, generate_preview
 
 
 def test_extract_frame_jpeg(video_data):
@@ -61,3 +61,23 @@ def test_create_thumbnail_png(video_data):
     thumb = create_thumbnail(video_data, format="png")
     assert len(thumb) > 0
     assert thumb[:4] == b"\x89PNG"
+
+
+def test_generate_preview_default(video_data):
+    previews = generate_preview(video_data)
+    assert isinstance(previews, list)
+    assert len(previews) == 9
+    for frame in previews:
+        assert frame[:2] == b"\xff\xd8"
+
+
+def test_generate_preview_png(video_data):
+    previews = generate_preview(video_data, num_frames=4, format="png")
+    assert len(previews) == 4
+    for frame in previews:
+        assert frame[:4] == b"\x89PNG"
+
+
+def test_generate_preview_invalid_num_frames(video_data):
+    with pytest.raises(ValueError, match="num_frames must be greater than 0"):
+        generate_preview(video_data, num_frames=0)

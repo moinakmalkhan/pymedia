@@ -1,6 +1,6 @@
 name: Release
 
-# Triggered only by pushing a version tag: git tag v0.2.1 && git push origin v0.2.1
+# Triggered only by pushing a version tag: git tag v0.2.3 && git push origin v0.2.3
 on:
   push:
     tags:

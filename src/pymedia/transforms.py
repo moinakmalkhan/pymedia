@@ -1,4 +1,5 @@
 import ctypes
+from typing import Sequence
 
 from pymedia._core import _call_bytes_fn, _lib
 
@@ -63,6 +64,26 @@ def merge_videos(video_data1: bytes, video_data2: bytes) -> bytes:
         buf2,
         len(video_data2),
     )
+
+
+def concat_videos(videos: Sequence[bytes]) -> bytes:
+    """Concatenate multiple videos in order.
+
+    Args:
+        videos: Sequence of video byte blobs. Must contain at least two items.
+
+    Returns:
+        Concatenated MP4 video bytes.
+    """
+    if len(videos) < 2:
+        raise ValueError("videos must contain at least two items")
+    if any(not item for item in videos):
+        raise ValueError("all videos must be non-empty bytes")
+
+    merged = merge_videos(videos[0], videos[1])
+    for video in videos[2:]:
+        merged = merge_videos(merged, video)
+    return merged
 
 
 def reverse_video(video_data: bytes) -> bytes:

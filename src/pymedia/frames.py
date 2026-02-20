@@ -78,3 +78,41 @@ def create_thumbnail(video_data: bytes, format: str = "jpeg") -> bytes:
     duration = info.get("duration", 0.0)
     timestamp = duration / 3.0 if duration > 0 else 0.0
     return extract_frame(video_data, timestamp=timestamp, format=format)
+
+
+def generate_preview(video_data: bytes, num_frames: int = 9, format: str = "jpeg") -> list:
+    """Extract evenly spaced preview frames across the clip.
+
+    Args:
+        video_data: Raw video file bytes.
+        num_frames: Number of preview frames to sample (default 9).
+        format: Output image format (jpeg or png).
+
+    Returns:
+        List of image bytes.
+    """
+    from pymedia.info import get_video_info
+
+    if num_frames <= 0:
+        raise ValueError("num_frames must be greater than 0")
+    fmt = format.lower()
+    if fmt not in SUPPORTED_IMAGE_FORMATS:
+        raise ValueError(
+            f"Unsupported image format '{format}'. Supported: {SUPPORTED_IMAGE_FORMATS}"
+        )
+
+    info = get_video_info(video_data)
+    duration = info.get("duration", 0.0)
+    if duration <= 0:
+        return [extract_frame(video_data, timestamp=0.0, format=fmt)]
+
+    if num_frames == 1:
+        return [extract_frame(video_data, timestamp=max(duration / 2.0, 0.0), format=fmt)]
+
+    # Sample endpoints and evenly spaced points in-between.
+    step = duration / (num_frames - 1)
+    frames = []
+    for i in range(num_frames):
+        ts = min(duration, i * step)
+        frames.append(extract_frame(video_data, timestamp=ts, format=fmt))
+    return frames
