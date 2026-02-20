@@ -1,5 +1,5 @@
 # Build artifacts
-src/pyvideo/_lib/libpyvideo.so
+src/pyvideo/_lib/libpyvideo*
 *.o
 *.so
 *.dylib
@@ -24,6 +24,7 @@ build/
 .pytest_cache/
 
 wheelhouse/
+_phases/
 
 # OS
 .DS_Store
