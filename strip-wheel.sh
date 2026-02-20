@@ -10,12 +10,12 @@ DEST_DIR="$2"
 auditwheel repair -w /tmp/_aw_out "$WHEEL"
 REPAIRED=$(ls /tmp/_aw_out/*.whl)
 
-# Step 2: unpack (a .whl is a zip), strip debug symbols, repack
+# Step 2: unpack (a .whl is a zip), strip unneeded symbols, repack with max deflate
 TMPDIR=$(mktemp -d)
 cd "$TMPDIR"
 unzip -q "$REPAIRED"
-find . -name "*.so*" -exec strip --strip-debug {} \; 2>/dev/null || true
-zip -qr "$DEST_DIR/$(basename "$REPAIRED")" .
+find . -name "*.so*" -exec strip --strip-unneeded {} \; 2>/dev/null || true
+zip -q -r -9 "$DEST_DIR/$(basename "$REPAIRED")" .
 
 # Cleanup
 cd /

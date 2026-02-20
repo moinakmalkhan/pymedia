@@ -28,11 +28,17 @@ jobs:
 
   build_macos_arm:
     name: Build macOS arm64 wheels
-    runs-on: macos-14
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - runner: macos-14
+            deployment_target: "14.0"
+          - runner: macos-15
+            deployment_target: "15.0"
     env:
-      # Homebrew FFmpeg on macOS 14 arm64 requires deployment target 14.0.
-      # Setting this here tags the wheel as macosx_14_0_arm64 so delocate doesn't reject it.
-      CIBW_ENVIRONMENT_MACOS: "MACOSX_DEPLOYMENT_TARGET=14.0 DYLD_LIBRARY_PATH=$(brew --prefix)/lib"
+      # Build both macOS 14 and macOS 15 arm64 wheel tags.
+      CIBW_ENVIRONMENT_MACOS: "MACOSX_DEPLOYMENT_TARGET=${{ matrix.deployment_target }} DYLD_LIBRARY_PATH=$(brew --prefix)/lib"
     steps:
       - uses: actions/checkout@v4
 
@@ -41,12 +47,19 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: wheels-macos-arm
+          name: wheels-macos-arm-${{ matrix.deployment_target }}
           path: ./wheelhouse/*.whl
 
   build_macos_x86:
     name: Build macOS x86_64 wheels (cross-compiled on arm64)
-    runs-on: macos-14
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - runner: macos-14
+            deployment_target: "14.0"
+          - runner: macos-15
+            deployment_target: "15.0"
     env:
       CIBW_ARCHS_MACOS: "x86_64"
       # Install Rosetta 2 and an x86_64 Homebrew prefix (/usr/local), then install FFmpeg for that arch.
@@ -55,8 +68,8 @@ jobs:
         arch -x86_64 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" < /dev/null || true &&
         arch -x86_64 /usr/local/bin/brew install ffmpeg pkg-config
       # x86_64 Homebrew lives at /usr/local, not /opt/homebrew.
-      # FFmpeg from Homebrew on macos-14 requires deployment target 14.0 regardless of arch.
-      CIBW_ENVIRONMENT_MACOS: "MACOSX_DEPLOYMENT_TARGET=14.0 PKG_CONFIG_PATH=/usr/local/opt/ffmpeg/lib/pkgconfig DYLD_LIBRARY_PATH=/usr/local/lib"
+      # Build both macOS 14 and macOS 15 x86_64 wheel tags.
+      CIBW_ENVIRONMENT_MACOS: "MACOSX_DEPLOYMENT_TARGET=${{ matrix.deployment_target }} PKG_CONFIG_PATH=/usr/local/opt/ffmpeg/lib/pkgconfig DYLD_LIBRARY_PATH=/usr/local/lib"
       CIBW_REPAIR_WHEEL_COMMAND_MACOS: "DYLD_LIBRARY_PATH=/usr/local/lib delocate-wheel -w {dest_dir} -v {wheel}"
     steps:
       - uses: actions/checkout@v4
@@ -66,7 +79,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: wheels-macos-x86
+          name: wheels-macos-x86-${{ matrix.deployment_target }}
           path: ./wheelhouse/*.whl
 
   build_windows:
@@ -74,15 +87,25 @@ jobs:
     runs-on: windows-latest
     env:
       CIBW_ARCHS_WINDOWS: "AMD64"
-      # pkg-config reads .pc files to pass -I/-L flags to the compiler.
-      CIBW_ENVIRONMENT_WINDOWS: "PKG_CONFIG_PATH=C:/ffmpeg/lib/pkgconfig"
-      # delvewheel bundles the FFmpeg .dll files into the wheel (equivalent to auditwheel on Linux).
-      CIBW_REPAIR_WHEEL_COMMAND_WINDOWS: "delvewheel repair -w {dest_dir} {wheel} --add-path C:/ffmpeg/bin"
+      FFMPEG_ROOT: "C:/ffmpeg"
+      # Build with MinGW gcc so FFmpeg import libraries from BtbN builds link reliably.
+      CIBW_ENVIRONMENT_WINDOWS: "FFMPEG_ROOT=C:/ffmpeg CC=gcc"
+      # Bundle FFmpeg + MinGW runtime DLLs into repaired wheel.
+      CIBW_REPAIR_WHEEL_COMMAND_WINDOWS: "delvewheel repair --add-path C:/ffmpeg/bin;C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin -w {dest_dir} {wheel}"
+      CIBW_BUILD_VERBOSITY: "1"
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install pkg-config
-        run: choco install pkgconfiglite -y
+      - name: Install MinGW
+        run: choco install mingw -y
+
+      - name: Add MinGW to PATH
+        shell: pwsh
+        run: |
+          $mingw = "C:\ProgramData\chocolatey\lib\mingw\tools\install\mingw64\bin"
+          if (Test-Path $mingw) {
+            $mingw | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          }
 
       - name: Download and extract FFmpeg dev libraries
         shell: pwsh
@@ -92,15 +115,22 @@ jobs:
           Expand-Archive -Path "$env:TEMP\ffmpeg.zip" -DestinationPath "$env:TEMP\ffmpeg_extract"
           # The zip contains a single top-level folder whose name varies by build date; move it to C:\ffmpeg.
           $src = Get-ChildItem "$env:TEMP\ffmpeg_extract" -Directory | Select-Object -First 1
-          Move-Item $src.FullName "C:\ffmpeg"
+          Move-Item $src.FullName "$env:FFMPEG_ROOT"
           # Add the bin dir to PATH so delvewheel can locate the .dll files at repair time.
-          "C:\ffmpeg\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-
-      - name: Install delvewheel
-        run: pip install delvewheel
+          "$env:FFMPEG_ROOT\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Build wheels
         uses: pypa/cibuildwheel@v2.21.3
+
+      - name: Inspect wheel dependencies (delvewheel show)
+        shell: pwsh
+        run: |
+          pip install delvewheel
+          $wheels = Get-ChildItem wheelhouse/*.whl
+          foreach ($wheel in $wheels) {
+            Write-Host "delvewheel show $($wheel.Name)"
+            python -m delvewheel show $wheel.FullName
+          }
 
       - uses: actions/upload-artifact@v4
         with:

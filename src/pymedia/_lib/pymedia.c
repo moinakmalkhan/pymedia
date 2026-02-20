@@ -19,6 +19,12 @@
 #include <libswresample/swresample.h>
 #include <libswscale/swscale.h>
 
+#if defined(_WIN32)
+#define PYMEDIA_API __declspec(dllexport)
+#else
+#define PYMEDIA_API __attribute__((visibility("default")))
+#endif
+
 // FFmpeg 5.1+ introduced AVChannelLayout (ch_layout) and deprecated
 // the old channel_layout / channels integer fields.
 // LIBAVCODEC_VERSION 59.37.100 == FFmpeg 5.1
@@ -108,7 +114,7 @@ static int find_stream(AVFormatContext *fmt_ctx, enum AVMediaType type) {
 // 1. get_video_info — returns malloc'd JSON string
 // ============================================================
 
-char* get_video_info(uint8_t *video_data, size_t video_size) {
+PYMEDIA_API char* get_video_info(uint8_t *video_data, size_t video_size) {
     BufferData bd;
     AVFormatContext *ifmt_ctx = NULL;
     AVIOContext *input_avio_ctx = NULL;
@@ -199,6 +205,15 @@ static int get_audio_format_info(const char *format, const char **encoder_name,
     return 0;
 }
 
+static enum AVSampleFormat pick_sample_fmt(const AVCodec *codec, enum AVSampleFormat preferred) {
+    const enum AVSampleFormat *fmts = codec ? codec->sample_fmts : NULL;
+    if (!fmts) return preferred;
+    for (const enum AVSampleFormat *p = fmts; *p != AV_SAMPLE_FMT_NONE; ++p) {
+        if (*p == preferred) return preferred;
+    }
+    return fmts[0];
+}
+
 static void encode_fifo_frames(AVAudioFifo *fifo, AVCodecContext *enc_ctx,
                                 AVFormatContext *ofmt_ctx, AVStream *out_stream,
                                 AVPacket *enc_pkt, AVFrame *enc_frame,
@@ -262,7 +277,7 @@ static void encode_fifo_remaining(AVAudioFifo *fifo, AVCodecContext *enc_ctx,
     }
 }
 
-uint8_t* extract_audio(uint8_t *video_data, size_t video_size,
+PYMEDIA_API uint8_t* extract_audio(uint8_t *video_data, size_t video_size,
                        const char *format, size_t *out_size) {
     *out_size = 0;
     AVFormatContext *ifmt_ctx = NULL;
@@ -307,11 +322,22 @@ uint8_t* extract_audio(uint8_t *video_data, size_t video_size,
 
     // Encoder
     const AVCodec *encoder = avcodec_find_encoder_by_name(encoder_name);
+    if (!encoder && strcmp(format, "ogg") == 0) {
+        // Some FFmpeg builds ship native Vorbis without the "libvorbis" alias.
+        encoder = avcodec_find_encoder_by_name("vorbis");
+    }
+    if (!encoder && strcmp(format, "ogg") == 0) {
+        encoder = avcodec_find_encoder(AV_CODEC_ID_VORBIS);
+    }
     if (!encoder) goto cleanup;
     enc_ctx = avcodec_alloc_context3(encoder);
     if (!enc_ctx) goto cleanup;
     enc_ctx->sample_rate = 44100;
-    enc_ctx->sample_fmt = enc_sample_fmt;
+    enc_ctx->sample_fmt = pick_sample_fmt(encoder, enc_sample_fmt);
+    if (strcmp(format, "ogg") == 0) {
+        // Native Vorbis is experimental in some FFmpeg builds.
+        enc_ctx->strict_std_compliance = FF_COMPLIANCE_EXPERIMENTAL;
+    }
 #if FF_NEW_CHANNEL_LAYOUT
     av_channel_layout_default(&enc_ctx->ch_layout, 2);
 #else
@@ -642,18 +668,18 @@ cleanup:
     return result;
 }
 
-uint8_t* convert_format(uint8_t *video_data, size_t video_size,
+PYMEDIA_API uint8_t* convert_format(uint8_t *video_data, size_t video_size,
                         const char *format, size_t *out_size) {
     return remux_video(video_data, video_size, format, -1, -1, 1, 1, out_size);
 }
 
-uint8_t* trim_video(uint8_t *video_data, size_t video_size,
+PYMEDIA_API uint8_t* trim_video(uint8_t *video_data, size_t video_size,
                     double start_sec, double end_sec, size_t *out_size) {
     return remux_video(video_data, video_size, NULL,
                        start_sec, end_sec, 1, 1, out_size);
 }
 
-uint8_t* mute_video(uint8_t *video_data, size_t video_size,
+PYMEDIA_API uint8_t* mute_video(uint8_t *video_data, size_t video_size,
                     size_t *out_size) {
     return remux_video(video_data, video_size, NULL, -1, -1, 0, 1, out_size);
 }
@@ -662,7 +688,7 @@ uint8_t* mute_video(uint8_t *video_data, size_t video_size,
 // 4. extract_frame — extract a single frame as JPEG/PNG
 // ============================================================
 
-uint8_t* extract_frame(uint8_t *video_data, size_t video_size,
+PYMEDIA_API uint8_t* extract_frame(uint8_t *video_data, size_t video_size,
                        double timestamp_sec, const char *img_format,
                        size_t *out_size) {
     *out_size = 0;
@@ -820,7 +846,7 @@ cleanup:
 // 5. reencode_video — compress / resize video (H.264 output)
 // ============================================================
 
-uint8_t* reencode_video(uint8_t *video_data, size_t video_size,
+PYMEDIA_API uint8_t* reencode_video(uint8_t *video_data, size_t video_size,
                         int crf, const char *preset,
                         int out_width, int out_height,
                         size_t *out_size) {
@@ -1051,7 +1077,7 @@ cleanup:
 // 6. video_to_gif
 // ============================================================
 
-uint8_t* video_to_gif(uint8_t *video_data, size_t video_size,
+PYMEDIA_API uint8_t* video_to_gif(uint8_t *video_data, size_t video_size,
                       int fps, int width,
                       double start_sec, double duration_sec,
                       size_t *out_size) {
@@ -1308,7 +1334,7 @@ static AVFrame* rotate_yuv420p_frame(AVFrame *src, int angle) {
     return dst;
 }
 
-uint8_t* rotate_video(uint8_t *video_data, size_t video_size,
+PYMEDIA_API uint8_t* rotate_video(uint8_t *video_data, size_t video_size,
                       int angle, size_t *out_size) {
     *out_size = 0;
     angle = ((angle % 360) + 360) % 360;
@@ -1493,7 +1519,7 @@ cleanup:
 // speed > 1.0 = faster, speed < 1.0 = slower
 // ============================================================
 
-uint8_t* change_speed(uint8_t *video_data, size_t video_size,
+PYMEDIA_API uint8_t* change_speed(uint8_t *video_data, size_t video_size,
                       double speed, size_t *out_size) {
     *out_size = 0;
     if (speed <= 0.0) return NULL;
@@ -1575,12 +1601,16 @@ cleanup:
     return result;
 }
 
+PYMEDIA_API void pymedia_free(void *ptr) {
+    free(ptr);
+}
+
 // ============================================================
 // 9. adjust_volume — change audio volume level
 // factor > 1.0 amplifies, < 1.0 reduces, 0.0 = silence
 // ============================================================
 
-uint8_t* adjust_volume(uint8_t *video_data, size_t video_size,
+PYMEDIA_API uint8_t* adjust_volume(uint8_t *video_data, size_t video_size,
                        double factor, size_t *out_size) {
     *out_size = 0;
     if (factor < 0.0) factor = 0.0;
@@ -1820,7 +1850,7 @@ cleanup:
 // 10. merge_videos — concatenate two videos sequentially
 // ============================================================
 
-uint8_t* merge_videos(uint8_t *data1, size_t size1,
+PYMEDIA_API uint8_t* merge_videos(uint8_t *data1, size_t size1,
                       uint8_t *data2, size_t size2,
                       size_t *out_size) {
     *out_size = 0;
@@ -1946,7 +1976,7 @@ cleanup:
 // 11. reverse_video — reverse video playback (audio dropped)
 // ============================================================
 
-uint8_t* reverse_video(uint8_t *video_data, size_t video_size,
+PYMEDIA_API uint8_t* reverse_video(uint8_t *video_data, size_t video_size,
                        size_t *out_size) {
     *out_size = 0;
 
@@ -2102,7 +2132,7 @@ cleanup:
 // 12. strip_metadata — remove all metadata tags
 // ============================================================
 
-uint8_t* strip_metadata(uint8_t *video_data, size_t video_size,
+PYMEDIA_API uint8_t* strip_metadata(uint8_t *video_data, size_t video_size,
                         size_t *out_size) {
     *out_size = 0;
     BufferData bd;
@@ -2179,7 +2209,7 @@ cleanup:
 // 13. set_metadata — set a metadata key/value on the container
 // ============================================================
 
-uint8_t* set_metadata(uint8_t *video_data, size_t video_size,
+PYMEDIA_API uint8_t* set_metadata(uint8_t *video_data, size_t video_size,
                       const char *key, const char *value,
                       size_t *out_size) {
     *out_size = 0;

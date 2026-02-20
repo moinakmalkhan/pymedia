@@ -163,8 +163,8 @@ Returns a dict with keys: `duration`, `width`, `height`, `fps`, `video_codec`,
 |---|---|
 | Linux (x86_64) | Pre-built wheel |
 | Linux (ARM64) | Pre-built wheel |
-| macOS (arm64, Apple Silicon) | Pre-built wheel (requires macOS 14+) |
-| macOS (x86_64, Intel) | Pre-built wheel (cross-compiled via Rosetta 2, requires macOS 14+) |
+| macOS (arm64, Apple Silicon) | Pre-built wheel (requires macOS 14+, macOS 15 supported) |
+| macOS (x86_64, Intel) | Pre-built wheel (cross-compiled via Rosetta 2, requires macOS 14+, macOS 15 supported) |
 | Windows (x86_64) | Pre-built wheel (FFmpeg bundled via delvewheel) |
 
 ## Contributing
@@ -284,7 +284,7 @@ src/pymedia/
 ├── info.py          # get_video_info
 └── _lib/
     ├── pymedia.c      # All C code (FFmpeg operations)
-    └── libpymedia.so  # Built automatically by `pip install` (libpymedia.dylib on macOS, pymedia.dll on Windows — not committed to git)
+    └── libpymedia.so  # Built automatically by `pip install` (libpymedia.dylib on macOS, libpymedia.dll on Windows — not committed to git)
 ```
 
 ### Guidelines

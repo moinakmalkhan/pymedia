@@ -16,7 +16,10 @@ def get_video_info(video_data: bytes) -> dict:
         num_streams.
     """
     buf = (ctypes.c_uint8 * len(video_data)).from_buffer_copy(video_data)
-    result = _lib.get_video_info(buf, len(video_data))
-    if not result:
+    result_ptr = _lib.get_video_info(buf, len(video_data))
+    if not result_ptr:
         raise RuntimeError("Failed to get video info")
-    return json.loads(result.decode("utf-8"))
+    try:
+        return json.loads(ctypes.string_at(result_ptr).decode("utf-8"))
+    finally:
+        _lib.pymedia_free(result_ptr)

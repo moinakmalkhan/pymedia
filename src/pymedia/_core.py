@@ -1,15 +1,24 @@
 import ctypes
 import os
+import sys
 
 _LIB_DIR = os.path.join(os.path.dirname(__file__), "_lib")
-_lib = ctypes.CDLL(os.path.join(_LIB_DIR, "libpymedia.so"))
+if sys.platform == "win32":
+    _LIB_NAME = "libpymedia.dll"
+elif sys.platform == "darwin":
+    _LIB_NAME = "libpymedia.dylib"
+else:
+    _LIB_NAME = "libpymedia.so"
+if sys.platform == "win32":
+    os.add_dll_directory(_LIB_DIR)
+_lib = ctypes.CDLL(os.path.join(_LIB_DIR, _LIB_NAME))
 
 # ── get_video_info ──
 _lib.get_video_info.argtypes = [
     ctypes.POINTER(ctypes.c_uint8),
     ctypes.c_size_t,
 ]
-_lib.get_video_info.restype = ctypes.c_char_p
+_lib.get_video_info.restype = ctypes.c_void_p
 
 # ── extract_audio ──
 _lib.extract_audio.argtypes = [
@@ -144,9 +153,9 @@ _lib.set_metadata.argtypes = [
 ]
 _lib.set_metadata.restype = ctypes.POINTER(ctypes.c_uint8)
 
-# ── free ──
-_lib.free.argtypes = [ctypes.c_void_p]
-_lib.free.restype = None
+# ── allocator bridge ──
+_lib.pymedia_free.argtypes = [ctypes.c_void_p]
+_lib.pymedia_free.restype = None
 
 
 def _call_bytes_fn(fn, *args):
@@ -156,5 +165,5 @@ def _call_bytes_fn(fn, *args):
     if not result_ptr:
         raise RuntimeError("Operation failed")
     data = ctypes.string_at(result_ptr, out_size.value)
-    _lib.free(result_ptr)
+    _lib.pymedia_free(result_ptr)
     return data
