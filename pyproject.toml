@@ -16,8 +16,7 @@ classifiers = [
     "Operating System :: POSIX :: Linux",
     "Operating System :: MacOS",
     "Topic :: Multimedia :: Video :: Conversion",
-    "Topic :: Multimedia :: Sound/Audio :: Conversion",
-    "Topic :: Multimedia :: Video :: Nonlinear Editor"
+    "Topic :: Multimedia :: Sound/Audio :: Conversion"
 ]
 
 [project.urls]
