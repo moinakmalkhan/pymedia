@@ -14,6 +14,18 @@ REPAIRED=$(ls /tmp/_aw_out/*.whl)
 TMPDIR=$(mktemp -d)
 cd "$TMPDIR"
 unzip -q "$REPAIRED"
+
+# Step 3: remove spurious libpython3.x dependencies injected by distro-packaged FFmpeg
+# (RPM Fusion FFmpeg on AlmaLinux 8 may include the 'pythonscript' demuxer which pulls
+# in libpython3.6m.so.1.0; we never use that demuxer and Python 3.6 is not part of the
+# manylinux ABI, so users without Python 3.6 get an OSError at import time).
+find . -name "*.so*" | while read -r lib; do
+    for py_dep in $(patchelf --print-needed "$lib" 2>/dev/null | grep 'libpython'); do
+        echo "Removing spurious dependency '$py_dep' from $lib"
+        patchelf --remove-needed "$py_dep" "$lib"
+    done
+done
+
 find . -name "*.so*" -exec strip --strip-unneeded {} \; 2>/dev/null || true
 zip -q -r -9 "$DEST_DIR/$(basename "$REPAIRED")" .
 

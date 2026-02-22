@@ -66,7 +66,7 @@ manylinux-aarch64-image = "manylinux_2_28"
 before-all = """
 dnf install -y epel-release
 dnf install -y https://mirrors.rpmfusion.org/free/el/rpmfusion-free-release-8.noarch.rpm
-dnf install -y ffmpeg-devel gcc pkg-config zip
+dnf install -y ffmpeg-devel gcc pkg-config zip patchelf
 """
 # auditwheel bundles all FFmpeg .so files into the wheel
 repair-wheel-command = "bash /project/strip-wheel.sh {wheel} {dest_dir}"
